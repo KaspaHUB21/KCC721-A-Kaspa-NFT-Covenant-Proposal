@@ -1,0 +1,16 @@
+{
+  "description": "KCC721 v0.2 issue token 2 from a fresh three-token migration tree",
+  "directions": [
+    1,
+    0
+  ],
+  "currentUnissuedRoot": "56f2cd794002227fbb1079f8dfe149e107e8e7f8832f61d10758d8a20d9f2590",
+  "nextUnissuedRoot": "52e26c3efab4218f689c92ca7f71b71814c066d3a21e0890d154df566c451d95",
+  "remainingBeforeIssue": 3,
+  "siblings": [
+    "f52f3a746c2545658e1c6add32e5410365553ebaaa0433f5f8bd90c6f85fd6e2",
+    "daab74e3e5c0b5a512a7a19068a97785ce2e4172b625ef59866b7b3246e75282"
+  ],
+  "supply": 3,
+  "tokenId": 2
+}

@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KCC721 Protocol Lab | Kaspa Dev Tools</title>
+    <meta name="theme-color" content="#101718" />
+    <link rel="icon" href="/assets/devtools-logo-uploaded.png?v=2" />
+    <link rel="apple-touch-icon" href="/assets/devtools-logo-uploaded.png?v=2" />
+    <link rel="stylesheet" href="/assets/styles.css?v=24" />
+  </head>
+  <body>
+    <div class="shell kcc721-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Kaspa Dev Tools">
+          <img src="/assets/devtools-logo-uploaded.png?v=2" alt="" />
+          <span>Kaspa Dev Tools</span>
+        </a>
+        <div class="wallet-actions">
+          <a class="button secondary" href="/">Dev Tools</a>
+          <button class="button secondary" id="kccConnect" type="button">Kasware Login</button>
+          <button class="icon-button" id="kccDisconnect" type="button" aria-label="Disconnect" title="Disconnect" disabled>
+            <span aria-hidden="true">&#x23FB;</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="kcc721-workspace">
+        <section class="kcc721-main">
+          <div class="kcc721-heading">
+            <div>
+              <p class="eyebrow">Protocol Lab</p>
+              <h1>KCC721</h1>
+              <p class="kcc721-lead">UTXO-native NFTs secured by Kaspa covenants.</p>
+            </div>
+            <span class="protocol-badge">Mainnet experimental</span>
+          </div>
+
+          <div class="draft-notice">
+            Experimental proposal with real Mainnet transactions. Review every collection value and Kasware transaction before signing. There is no recovery or protocol guarantee.
+          </div>
+
+          <div class="mode-switch" role="tablist" aria-label="Collection mode">
+            <button class="active" type="button" data-mode="deploy" role="tab" aria-selected="true">New collection</button>
+            <button type="button" data-mode="mint" role="tab" aria-selected="false">Mint KCC721</button>
+            <button type="button" data-mode="transfer" role="tab" aria-selected="false">Transfer KCC721</button>
+            <button type="button" data-mode="migrate" role="tab" aria-selected="false">Migrate KRC721</button>
+          </div>
+
+          <form class="panel kcc721-form" id="kcc721Form">
+            <div class="form-grid kcc-form-grid">
+              <div class="field collection-field">
+                <label for="kccTicker">Collection ticker</label>
+                <input id="kccTicker" name="ticker" maxlength="10" placeholder="HUBNFT" required autocomplete="off" />
+              </div>
+              <div class="field deploy-field">
+                <label for="kccSupply">NFT supply</label>
+                <input id="kccSupply" name="supply" type="number" min="1" max="25000" step="1" placeholder="1000" required />
+              </div>
+            </div>
+
+            <div class="field deploy-field">
+              <label for="kccMetadata">Metadata URL (IPFS)</label>
+              <input id="kccMetadata" name="metadataUrl" placeholder="ipfs://bafy..." required autocomplete="off" />
+            </div>
+
+            <div class="form-grid kcc-form-grid deploy-field">
+              <div class="field">
+                <label for="kccMintPrice">Mint price (KAS)</label>
+                <input id="kccMintPrice" name="mintPriceKas" type="number" min="0" step="0.00000001" placeholder="Optional" />
+              </div>
+              <div class="field">
+                <label for="kccMintDaa">Mint DAA score</label>
+                <input id="kccMintDaa" name="mintDaaScore" type="number" min="0" step="1" placeholder="Optional" />
+              </div>
+            </div>
+
+            <div class="migration-panel" id="migrationPanel" hidden>
+              <div class="migration-copy">
+                <span class="muted">Source</span>
+                <strong>KRC721 Mainnet</strong>
+                <p>Creates a real Mainnet v0.2 migration controller. Every 1-based source token can then be issued exactly once and sent directly to its recipient.</p>
+              </div>
+              <button class="button secondary" id="inspectMigration" type="button">Inspect collection</button>
+            </div>
+
+            <div class="migration-result" id="migrationResult" hidden></div>
+
+            <div class="mint-panel" id="mintPanel" hidden>
+              <div class="field">
+                <label for="kccCollectionId">Collection ID</label>
+                <input id="kccCollectionId" maxlength="64" placeholder="64-character covenant ID" autocomplete="off" />
+              </div>
+              <p>Minting uses a committed random order. The NFT identity stays hidden until the paid Mainnet commitment is accepted.</p>
+            </div>
+
+            <div class="mint-panel" id="transferPanel" hidden>
+              <div class="field">
+                <label for="kccNftId">NFT ID</label>
+                <input id="kccNftId" maxlength="64" placeholder="64-character covenant ID" autocomplete="off" />
+              </div>
+              <div class="field">
+                <label for="kccRecipientAddress">Destination address</label>
+                <input id="kccRecipientAddress" placeholder="kaspa:..." autocomplete="off" spellcheck="false" />
+              </div>
+              <p>Ownership and the current covenant outpoint are verified before Kasware signs the transfer.</p>
+            </div>
+
+            <div class="mint-panel" id="migrationIssuePanel" hidden>
+              <div class="field">
+                <label for="kccMigrationCollectionId">Migration collection ID</label>
+                <input id="kccMigrationCollectionId" maxlength="64" readonly />
+              </div>
+              <div class="field">
+                <label for="kccMigrationTokenId">Source token ID</label>
+                <input id="kccMigrationTokenId" type="number" min="1" step="1" readonly />
+              </div>
+              <div class="field">
+                <label for="kccMigrationRecipient">Airdrop destination</label>
+                <input id="kccMigrationRecipient" placeholder="kaspa:..." autocomplete="off" spellcheck="false" />
+              </div>
+              <p>The selected source ID is issued exactly once as a KCC721 covenant NFT and sent directly to this address.</p>
+            </div>
+
+            <div class="kcc-form-footer">
+              <div class="wallet-pill" id="kccWalletPill">Not connected</div>
+              <button class="button primary" id="prepareKcc721" type="submit">Prepare deployment plan</button>
+            </div>
+          </form>
+        </section>
+
+        <div class="kcc721-side-stack">
+          <aside class="panel kcc721-side">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Review</p>
+                <h2>Protocol Plan</h2>
+              </div>
+            </div>
+            <div class="plan-empty" id="planEmpty">No plan prepared.</div>
+            <div class="protocol-plan" id="protocolPlan" hidden></div>
+            <label class="kcc-risk-confirm" id="kccRiskWrap" hidden>
+              <input id="kccRiskConfirm" type="checkbox" />
+              <span>I understand this proposal is experimental and the Mainnet transaction is irreversible.</span>
+            </label>
+            <div class="kcc-side-actions">
+              <button class="button primary" id="signKccPlan" type="button" disabled>Sign &amp; broadcast Mainnet</button>
+              <button class="button secondary" id="downloadKccPlan" type="button" disabled>Download JSON</button>
+            </div>
+          </aside>
+          <section class="panel kcc-wallet-nfts" aria-labelledby="walletNftsTitle">
+            <div class="panel-head compact-head">
+              <div>
+                <p class="eyebrow">Wallet collection</p>
+                <h2 id="walletNftsTitle">MY KCC721 NFTs</h2>
+              </div>
+              <button class="icon-button" id="refreshWalletNfts" type="button" aria-label="Refresh wallet NFTs" title="Refresh wallet NFTs">&#x21BB;</button>
+            </div>
+            <div class="kcc-wallet-nft-status" id="walletNftStatus">Connect Kasware to load your NFTs.</div>
+            <div class="kcc-wallet-nft-grid" id="walletNftGrid"></div>
+          </section>
+        </div>
+      </main>
+
+      <section class="kcc-indexer" aria-labelledby="kccIndexerTitle">
+        <div class="panel-head compact-head kcc-indexer-head">
+          <div>
+            <p class="eyebrow">Mainnet Registry</p>
+            <h2 id="kccIndexerTitle">KCC721 Indexer</h2>
+          </div>
+          <div class="kcc-indexer-tools">
+            <label class="sr-only" for="kccIndexerSearch">Search indexed collections</label>
+            <input id="kccIndexerSearch" type="search" placeholder="Ticker, collection ID or deployer" autocomplete="off" />
+            <button class="button secondary" id="refreshKccIndexer" type="button">Refresh</button>
+          </div>
+        </div>
+        <div class="kcc-indexer-status" id="kccIndexerStatus">Loading accepted Mainnet collections...</div>
+        <div class="kcc-collection-list" id="kccCollectionList"></div>
+      </section>
+    </div>
+
+    <footer class="footer-glow">
+      <a href="https://kaslab.space/" aria-label="Visit HUB21 at kaslab.space">Developed by HUB21</a>
+    </footer>
+    <section class="mint-success-modal" id="mintSuccessModal" hidden>
+      <div class="vault-backdrop" id="closeMintSuccessBackdrop"></div>
+      <div class="mint-success-dialog" role="dialog" aria-modal="true" aria-labelledby="mintSuccessTitle">
+        <div class="vault-head">
+          <div>
+            <p class="eyebrow">Mint accepted</p>
+            <h2 id="mintSuccessTitle">Your KCC721 NFT</h2>
+          </div>
+          <button class="icon-button" id="closeMintSuccess" type="button" aria-label="Close mint result" title="Close">×</button>
+        </div>
+        <div class="mint-success-content">
+          <div class="mint-success-media">
+            <img id="mintSuccessImage" src="/assets/devtools-logo-uploaded.png?v=2" alt="Minted NFT" />
+          </div>
+          <div class="mint-success-copy">
+            <p class="eyebrow" id="mintSuccessTicker">KCC721</p>
+            <h3 id="mintSuccessName">NFT minted</h3>
+            <dl class="kcc-browser-data">
+              <dt>Token ID</dt><dd><strong id="mintSuccessTokenId"></strong></dd>
+              <dt>NFT ID</dt><dd><code id="mintSuccessNftId"></code></dd>
+            </dl>
+            <p class="mint-success-status" id="mintSuccessStatus">Loading indexed metadata...</p>
+            <a class="button primary" id="openMintedNft" href="/kcc721">View NFT</a>
+          </div>
+        </div>
+      </div>
+    </section>
+    <div class="toast" id="kccToast" hidden></div>
+    <script src="/assets/kcc721.js?v=19"></script>
+  </body>
+</html>

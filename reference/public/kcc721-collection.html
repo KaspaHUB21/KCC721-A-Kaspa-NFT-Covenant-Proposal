@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KCC721 Collection | Kaspa Dev Tools</title>
+    <meta name="theme-color" content="#101718" />
+    <link rel="icon" href="/assets/devtools-logo-uploaded.png?v=2" />
+    <link rel="stylesheet" href="/assets/styles.css?v=22" />
+  </head>
+  <body>
+    <div class="shell kcc721-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Kaspa Dev Tools">
+          <img src="/assets/devtools-logo-uploaded.png?v=2" alt="" />
+          <span>Kaspa Dev Tools</span>
+        </a>
+        <div class="wallet-actions">
+          <a class="button secondary" href="/kcc721">KCC721</a>
+          <a class="button secondary" href="/">Dev Tools</a>
+        </div>
+      </header>
+
+      <main class="kcc-browser">
+        <div class="kcc-browser-loading" id="collectionLoading">Loading collection...</div>
+        <section id="collectionContent" hidden>
+          <div class="kcc-browser-head">
+            <div>
+              <p class="eyebrow" id="collectionEyebrow">KCC721 Collection</p>
+              <h1 id="collectionTitle"></h1>
+              <p id="collectionDescription"></p>
+            </div>
+            <span class="protocol-badge" id="collectionBadge"></span>
+          </div>
+
+          <div class="kcc-browser-stats" id="collectionStats"></div>
+          <dl class="kcc-browser-data" id="collectionData"></dl>
+
+          <div class="kcc-gallery-head">
+            <div>
+              <p class="eyebrow">NFTs</p>
+              <h2>Collection Items</h2>
+            </div>
+            <span id="galleryCount"></span>
+          </div>
+          <div class="kcc-nft-gallery" id="nftGallery"></div>
+          <div class="kcc-gallery-actions">
+            <button class="button secondary" id="loadMoreNfts" type="button" hidden>Load more</button>
+          </div>
+        </section>
+      </main>
+    </div>
+    <footer class="footer-glow"><a href="https://kaslab.space/">Developed by HUB21</a></footer>
+    <script src="/assets/kcc721-collection.js?v=5"></script>
+  </body>
+</html>

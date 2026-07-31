@@ -1,0 +1,74 @@
+pragma silverscript ^0.1.0;
+
+// A paid blind-mint commitment. The shuffle leaf cannot be inspected until it
+// is revealed, but its membership in the immutable collection root is checked.
+contract KCC721V2Ticket(
+    byte[] nftTemplatePrefix,
+    byte[] nftTemplateSuffix,
+    byte[32] nftTemplateHash,
+    byte[32] initialCollectionId,
+    int initialMintIndex,
+    int initialMaxSupply,
+    byte[32] initialMetadataDigest,
+    byte[32] initialShuffleRoot,
+    pubkey initialRecipient
+) {
+    byte[32] collectionId = initialCollectionId;
+    int mintIndex = initialMintIndex;
+    int maxSupply = initialMaxSupply;
+    byte[32] metadataDigest = initialMetadataDigest;
+    byte[32] shuffleRoot = initialShuffleRoot;
+    pubkey recipient = initialRecipient;
+
+    struct NFTState {
+        byte[32] collectionId;
+        int tokenId;
+        byte[32] metadataDigest;
+        pubkey owner;
+    }
+
+    #[covenant.singleton(termination = allowed)]
+    function reveal(
+        State prevState,
+        State[] newStates,
+        int tokenId,
+        byte[32] salt,
+        byte[32][] siblings,
+        byte[] directions,
+        int nftOutputIndex
+    ) {
+        require(newStates.length == 0);
+        require(prevState.collectionId == collectionId);
+        require(mintIndex >= 1);
+        require(mintIndex <= maxSupply);
+        require(tokenId >= 1);
+        require(tokenId <= maxSupply);
+        require(siblings.length == directions.length);
+        require(siblings.length <= 32);
+
+        byte[32] node = sha256(byte[8](mintIndex) + byte[8](tokenId) + salt);
+        for (i, 0, siblings.length, 32) {
+            if (OpBin2Num(directions[i]) == 0) {
+                node = sha256(node + siblings[i]);
+            } else {
+                node = sha256(siblings[i] + node);
+            }
+        }
+        require(node == shuffleRoot);
+
+        NFTState nftState = {
+            collectionId: collectionId,
+            tokenId: tokenId,
+            metadataDigest: metadataDigest,
+            owner: recipient
+        };
+        validateOutputStateWithTemplate(
+            nftOutputIndex,
+            nftState,
+            nftTemplatePrefix,
+            nftTemplateSuffix,
+            nftTemplateHash
+        );
+        require(tx.outputs[nftOutputIndex].value >= 50000000);
+    }
+}

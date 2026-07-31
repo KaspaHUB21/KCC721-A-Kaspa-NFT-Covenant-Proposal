@@ -1,0 +1,29 @@
+pragma silverscript ^0.1.0;
+
+// KCC721 v0.2 uses public token IDs in the inclusive range 1..maxSupply.
+contract KCC721V2NFT(
+    byte[32] initialCollectionId,
+    int initialTokenId,
+    byte[32] initialMetadataDigest,
+    pubkey initialOwner
+) {
+    byte[32] collectionId = initialCollectionId;
+    int tokenId = initialTokenId;
+    byte[32] metadataDigest = initialMetadataDigest;
+    pubkey owner = initialOwner;
+
+    #[covenant.singleton]
+    function transfer(State prevState, State nextState, int ownerInputIndex) {
+        require(prevState.tokenId >= 1);
+        require(nextState.collectionId == prevState.collectionId);
+        require(nextState.tokenId == prevState.tokenId);
+        require(nextState.metadataDigest == prevState.metadataDigest);
+        require(ownerInputIndex >= 0);
+        require(ownerInputIndex < tx.inputs.length);
+        require(ownerInputIndex != this.activeInputIndex);
+        byte[34] currentOwnerScript = new ScriptPubKeyP2PK(prevState.owner);
+        require(tx.inputs[ownerInputIndex].scriptPubKey == byte[](currentOwnerScript));
+        int nftOutputIndex = OpAuthOutputIdx(this.activeInputIndex, 0);
+        require(tx.outputs[nftOutputIndex].value >= tx.inputs[this.activeInputIndex].value);
+    }
+}

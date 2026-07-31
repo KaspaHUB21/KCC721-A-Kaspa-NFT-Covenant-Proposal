@@ -1,0 +1,82 @@
+pragma silverscript ^0.1.0;
+
+// Singleton collection controller. Every successful mint advances nextTokenId
+// exactly once and creates one independently bound NFT covenant output.
+contract KCC721Collection(
+    pubkey initialDeployer,
+    int initialMaxSupply,
+    byte[32] initialMetadataDigest,
+    int initialMintPrice,
+    int initialMintDaaScore,
+    int initialNextTokenId,
+    byte[] nftTemplatePrefix,
+    byte[] nftTemplateSuffix,
+    byte[32] nftTemplateHash
+) {
+    pubkey deployer = initialDeployer;
+    int maxSupply = initialMaxSupply;
+    byte[32] metadataDigest = initialMetadataDigest;
+    int mintPrice = initialMintPrice;
+    int mintDaaScore = initialMintDaaScore;
+    int nextTokenId = initialNextTokenId;
+
+    struct NFTState {
+        byte[32] collectionId;
+        int tokenId;
+        byte[32] metadataDigest;
+        pubkey owner;
+    }
+
+    #[covenant.singleton]
+    function mint(
+        State prevState,
+        State nextState,
+        pubkey recipient,
+        int nftOutputIndex,
+        int paymentOutputIndex
+    ) {
+        require(prevState.maxSupply > 0);
+        require(prevState.nextTokenId >= 0);
+        require(prevState.nextTokenId < prevState.maxSupply);
+
+        require(nextState.deployer == prevState.deployer);
+        require(nextState.maxSupply == prevState.maxSupply);
+        require(nextState.metadataDigest == prevState.metadataDigest);
+        require(nextState.mintPrice == prevState.mintPrice);
+        require(nextState.mintDaaScore == prevState.mintDaaScore);
+        require(nextState.nextTokenId == prevState.nextTokenId + 1);
+
+        require(nftOutputIndex >= 0);
+        require(nftOutputIndex < tx.outputs.length);
+        require(OpOutputCovenantId(nftOutputIndex) != OpInputCovenantId(this.activeInputIndex));
+
+        NFTState nftState = {
+            collectionId: OpInputCovenantId(this.activeInputIndex),
+            tokenId: prevState.nextTokenId,
+            metadataDigest: prevState.metadataDigest,
+            owner: recipient
+        };
+        validateOutputStateWithTemplate(
+            nftOutputIndex,
+            nftState,
+            nftTemplatePrefix,
+            nftTemplateSuffix,
+            nftTemplateHash
+        );
+
+        if (prevState.mintDaaScore > 0) {
+            require(tx.locktime >= prevState.mintDaaScore);
+        }
+
+        if (prevState.mintPrice > 0) {
+            require(paymentOutputIndex >= 0);
+            require(paymentOutputIndex < tx.outputs.length);
+            byte[34] deployerScript = new ScriptPubKeyP2PK(prevState.deployer);
+            require(tx.outputs[paymentOutputIndex].scriptPubKey == byte[](deployerScript));
+            require(tx.outputs[paymentOutputIndex].value >= prevState.mintPrice);
+        }
+
+        int controllerOutputIndex = OpAuthOutputIdx(this.activeInputIndex, 0);
+        require(tx.outputs[controllerOutputIndex].value >= tx.inputs[this.activeInputIndex].value);
+    }
+}

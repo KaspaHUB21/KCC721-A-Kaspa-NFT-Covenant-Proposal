@@ -1,0 +1,80 @@
+pragma silverscript ^0.1.0;
+
+// The controller reserves one immutable shuffle position per paid commitment.
+contract KCC721V2Collection(
+    pubkey initialDeployer,
+    int initialMaxSupply,
+    byte[32] initialMetadataDigest,
+    byte[32] initialShuffleRoot,
+    int initialMintPrice,
+    int initialMintDaaScore,
+    int initialNextMintIndex,
+    byte[] ticketTemplatePrefix,
+    byte[] ticketTemplateSuffix,
+    byte[32] ticketTemplateHash
+) {
+    pubkey deployer = initialDeployer;
+    int maxSupply = initialMaxSupply;
+    byte[32] metadataDigest = initialMetadataDigest;
+    byte[32] shuffleRoot = initialShuffleRoot;
+    int mintPrice = initialMintPrice;
+    int mintDaaScore = initialMintDaaScore;
+    int nextMintIndex = initialNextMintIndex;
+
+    struct TicketState {
+        byte[32] collectionId;
+        int mintIndex;
+        int maxSupply;
+        byte[32] metadataDigest;
+        byte[32] shuffleRoot;
+        pubkey recipient;
+    }
+
+    #[covenant.singleton]
+    function commit(
+        State prevState,
+        State nextState,
+        pubkey recipient,
+        int ticketOutputIndex,
+        int paymentOutputIndex
+    ) {
+        require(prevState.nextMintIndex >= 1);
+        require(prevState.nextMintIndex <= prevState.maxSupply);
+        require(nextState.deployer == prevState.deployer);
+        require(nextState.maxSupply == prevState.maxSupply);
+        require(nextState.metadataDigest == prevState.metadataDigest);
+        require(nextState.shuffleRoot == prevState.shuffleRoot);
+        require(nextState.mintPrice == prevState.mintPrice);
+        require(nextState.mintDaaScore == prevState.mintDaaScore);
+        require(nextState.nextMintIndex == prevState.nextMintIndex + 1);
+
+        TicketState ticketState = {
+            collectionId: OpInputCovenantId(this.activeInputIndex),
+            mintIndex: prevState.nextMintIndex,
+            maxSupply: prevState.maxSupply,
+            metadataDigest: prevState.metadataDigest,
+            shuffleRoot: prevState.shuffleRoot,
+            recipient: recipient
+        };
+        validateOutputStateWithTemplate(
+            ticketOutputIndex,
+            ticketState,
+            ticketTemplatePrefix,
+            ticketTemplateSuffix,
+            ticketTemplateHash
+        );
+        require(tx.outputs[ticketOutputIndex].value > 50000000);
+
+        if (prevState.mintDaaScore > 0) {
+            require(tx.locktime >= prevState.mintDaaScore);
+        }
+        if (prevState.mintPrice > 0) {
+            require(paymentOutputIndex >= 0);
+            byte[34] deployerScript = new ScriptPubKeyP2PK(prevState.deployer);
+            require(tx.outputs[paymentOutputIndex].scriptPubKey == byte[](deployerScript));
+            require(tx.outputs[paymentOutputIndex].value >= prevState.mintPrice);
+        }
+        int controllerOutputIndex = OpAuthOutputIdx(this.activeInputIndex, 0);
+        require(tx.outputs[controllerOutputIndex].value >= tx.inputs[this.activeInputIndex].value);
+    }
+}

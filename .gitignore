@@ -1,0 +1,9 @@
+/reference/runtime/
+/reference/backups/
+**/target/
+**/__pycache__/
+*.py[cod]
+*.log
+.env
+.env.*
+.DS_Store

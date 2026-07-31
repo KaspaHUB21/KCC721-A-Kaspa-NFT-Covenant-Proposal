@@ -1,0 +1,89 @@
+pragma silverscript ^0.1.0;
+
+// Migration controller for arbitrary, one-time issuance of 1-based source IDs.
+contract KCC721V2Migration(
+    pubkey initialDeployer,
+    int initialMaxSupply,
+    byte[32] initialMetadataDigest,
+    byte[32] initialUnissuedRoot,
+    int initialRemaining,
+    byte[] nftTemplatePrefix,
+    byte[] nftTemplateSuffix,
+    byte[32] nftTemplateHash
+) {
+    pubkey deployer = initialDeployer;
+    int maxSupply = initialMaxSupply;
+    byte[32] metadataDigest = initialMetadataDigest;
+    byte[32] unissuedRoot = initialUnissuedRoot;
+    int remaining = initialRemaining;
+
+    struct NFTState {
+        byte[32] collectionId;
+        int tokenId;
+        byte[32] metadataDigest;
+        pubkey owner;
+    }
+
+    #[covenant.singleton]
+    function issue(
+        State prevState,
+        State nextState,
+        int tokenId,
+        pubkey recipient,
+        int ownerInputIndex,
+        int nftOutputIndex,
+        byte[32][] siblings,
+        byte[] directions
+    ) {
+        require(tokenId >= 1);
+        require(tokenId <= prevState.maxSupply);
+        require(prevState.remaining > 0);
+        require(siblings.length == directions.length);
+        require(siblings.length <= 32);
+
+        byte[32] liveNode = sha256(byte[8](tokenId) + 0x01);
+        byte[32] spentNode = sha256(byte[8](tokenId) + 0x00);
+        for (i, 0, siblings.length, 32) {
+            int direction = OpBin2Num(directions[i]);
+            require(direction == 0 || direction == 1);
+            if (direction == 0) {
+                liveNode = sha256(liveNode + siblings[i]);
+                spentNode = sha256(spentNode + siblings[i]);
+            } else {
+                liveNode = sha256(siblings[i] + liveNode);
+                spentNode = sha256(siblings[i] + spentNode);
+            }
+        }
+        require(liveNode == prevState.unissuedRoot);
+
+        require(nextState.deployer == prevState.deployer);
+        require(nextState.maxSupply == prevState.maxSupply);
+        require(nextState.metadataDigest == prevState.metadataDigest);
+        require(nextState.unissuedRoot == spentNode);
+        require(nextState.remaining == prevState.remaining - 1);
+
+        require(ownerInputIndex >= 0);
+        require(ownerInputIndex < tx.inputs.length);
+        require(ownerInputIndex != this.activeInputIndex);
+        byte[34] deployerScript = new ScriptPubKeyP2PK(prevState.deployer);
+        require(tx.inputs[ownerInputIndex].scriptPubKey == byte[](deployerScript));
+
+        NFTState nftState = {
+            collectionId: OpInputCovenantId(this.activeInputIndex),
+            tokenId: tokenId,
+            metadataDigest: prevState.metadataDigest,
+            owner: recipient
+        };
+        validateOutputStateWithTemplate(
+            nftOutputIndex,
+            nftState,
+            nftTemplatePrefix,
+            nftTemplateSuffix,
+            nftTemplateHash
+        );
+        require(tx.outputs[nftOutputIndex].value >= 50000000);
+
+        int controllerOutputIndex = OpAuthOutputIdx(this.activeInputIndex, 0);
+        require(tx.outputs[controllerOutputIndex].value >= tx.inputs[this.activeInputIndex].value);
+    }
+}

@@ -1,0 +1,34 @@
+pragma silverscript ^0.1.0;
+
+// One covenant lineage represents exactly one NFT. Collection identity, token ID,
+// and metadata digest are immutable; only the owner may change.
+contract KCC721NFT(
+    byte[32] initialCollectionId,
+    int initialTokenId,
+    byte[32] initialMetadataDigest,
+    pubkey initialOwner
+) {
+    byte[32] collectionId = initialCollectionId;
+    int tokenId = initialTokenId;
+    byte[32] metadataDigest = initialMetadataDigest;
+    pubkey owner = initialOwner;
+
+    #[covenant.singleton]
+    function transfer(State prevState, State nextState, int ownerInputIndex) {
+        require(nextState.collectionId == prevState.collectionId);
+        require(nextState.tokenId == prevState.tokenId);
+        require(nextState.metadataDigest == prevState.metadataDigest);
+
+        // Kasware signs this ordinary P2PK input as part of the same PSKT. The
+        // covenant therefore authenticates the current owner without requiring
+        // a wallet-specific covenant signing API.
+        require(ownerInputIndex >= 0);
+        require(ownerInputIndex < tx.inputs.length);
+        require(ownerInputIndex != this.activeInputIndex);
+        byte[34] currentOwnerScript = new ScriptPubKeyP2PK(prevState.owner);
+        require(tx.inputs[ownerInputIndex].scriptPubKey == byte[](currentOwnerScript));
+
+        int nftOutputIndex = OpAuthOutputIdx(this.activeInputIndex, 0);
+        require(tx.outputs[nftOutputIndex].value >= tx.inputs[this.activeInputIndex].value);
+    }
+}

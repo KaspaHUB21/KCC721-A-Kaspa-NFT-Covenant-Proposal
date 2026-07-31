@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KCC721 NFT | Kaspa Dev Tools</title>
+    <meta name="theme-color" content="#101718" />
+    <link rel="icon" href="/assets/devtools-logo-uploaded.png?v=2" />
+    <link rel="stylesheet" href="/assets/styles.css?v=25" />
+  </head>
+  <body>
+    <div class="shell kcc721-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Kaspa Dev Tools">
+          <img src="/assets/devtools-logo-uploaded.png?v=2" alt="" />
+          <span>Kaspa Dev Tools</span>
+        </a>
+        <div class="wallet-actions">
+          <a class="button secondary" id="backToCollection" href="/kcc721">Collection</a>
+          <a class="button secondary" href="/kcc721">KCC721</a>
+        </div>
+      </header>
+
+      <main class="kcc-browser">
+        <div class="kcc-browser-loading" id="nftLoading">Loading NFT metadata...</div>
+        <article class="kcc-nft-detail" id="nftContent" hidden>
+          <div class="kcc-nft-media">
+            <img id="nftImage" alt="" />
+          </div>
+          <div class="kcc-nft-info">
+            <p class="eyebrow" id="nftTicker"></p>
+            <h1 id="nftName"></h1>
+            <div class="draft-notice" id="nftMigrationStatus"></div>
+            <div class="kcc-nft-actions">
+              <a class="button primary" id="transferNft" href="/kcc721" hidden>Send NFT</a>
+            </div>
+            <p class="kcc-nft-description" id="nftDescription"></p>
+            <dl class="kcc-browser-data" id="nftData"></dl>
+            <div class="kcc-attributes" id="nftAttributes"></div>
+          </div>
+          <section class="kcc-raw-metadata">
+            <div class="kcc-gallery-head"><div><p class="eyebrow">IPFS</p><h2>Raw Metadata</h2></div></div>
+            <pre id="nftRawMetadata"></pre>
+          </section>
+        </article>
+      </main>
+    </div>
+    <footer class="footer-glow"><a href="https://kaslab.space/">Developed by HUB21</a></footer>
+    <script src="/assets/kcc721-nft.js?v=5"></script>
+  </body>
+</html>
