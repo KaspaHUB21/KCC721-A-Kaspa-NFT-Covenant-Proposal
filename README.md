@@ -18,7 +18,7 @@ the public Mainnet lab:
 - indexing and security profiles
 
 > KCC721 is a draft proposal. The test page creates real, irreversible Mainnet
-> transactions. It has not received an independent security audit.
+> transactions.
 
 ## Live test page
 
@@ -239,7 +239,6 @@ move beyond Draft, it still needs:
 
 - an independent implementation
 - a permissionless full-BlockDAG indexer
-- external security review
 - wallet interoperability testing beyond the current Kasware flow
 - broader review of covenant cell values and long-term availability assumptions
 

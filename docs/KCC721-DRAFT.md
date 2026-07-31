@@ -183,5 +183,5 @@ calculates normalized Toccata fees at 100 sompi per gram and never receives a
 private key.
 
 Before a standards submission moves beyond Draft, the project still requires
-an independent implementation, permissionless BlockDAG indexer, external
-security review, and public interoperability vectors from more than one wallet.
+an independent implementation, permissionless BlockDAG indexer, and public
+interoperability vectors from more than one wallet.

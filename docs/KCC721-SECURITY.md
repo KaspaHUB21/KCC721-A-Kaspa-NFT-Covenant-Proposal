@@ -32,9 +32,8 @@ not hold wallet keys. Its SQLite registry is not a permissionless source of
 truth. Users and independent indexers should verify transactions, Covenant IDs,
 script state, and unspent lineage tips against their own Kaspa node.
 
-## Review status
+## Verification status
 
-The reference implementation has executable positive and negative covenant
-tests and registry regression tests. It has not received an independent
-security audit. Mainnet use remains experimental until that review and an
-independent implementation exist.
+The reference implementation includes executable positive and negative
+covenant tests plus registry regression tests. Mainnet use remains experimental
+while KCC721 is a draft protocol.
