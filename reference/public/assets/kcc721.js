@@ -1,6 +1,16 @@
 (() => {
   const PENDING_MINT_KEY = "kcc721-pending-blind-mint";
-  const state = { mode: "deploy", walletAddress: "", publicKey: "", migration: null, plan: null, broadcasting: false };
+  const WALLET_NFT_PAGE_SIZE = 4;
+  const state = {
+    mode: "deploy",
+    walletAddress: "",
+    publicKey: "",
+    migration: null,
+    plan: null,
+    broadcasting: false,
+    walletNftNext: 0,
+    walletNftLoading: false,
+  };
   const els = {
     form: document.querySelector("#kcc721Form"),
     ticker: document.querySelector("#kccTicker"),
@@ -37,6 +47,7 @@
     walletNftStatus: document.querySelector("#walletNftStatus"),
     walletNftGrid: document.querySelector("#walletNftGrid"),
     refreshWalletNfts: document.querySelector("#refreshWalletNfts"),
+    loadMoreWalletNfts: document.querySelector("#loadMoreWalletNfts"),
     toast: document.querySelector("#kccToast"),
     mintSuccessModal: document.querySelector("#mintSuccessModal"),
     mintSuccessImage: document.querySelector("#mintSuccessImage"),
@@ -545,49 +556,67 @@
     els.mintSuccessStatus.textContent = "Mint accepted. Registry indexing is still finishing in the background.";
   }
 
-  async function loadWalletNfts() {
-    const requestId = (loadWalletNfts.requestId || 0) + 1;
-    loadWalletNfts.requestId = requestId;
+  async function loadWalletNfts({ append = false } = {}) {
+    if (append && state.walletNftLoading) return;
+    const requestId = append
+      ? (loadWalletNfts.requestId || 0)
+      : (loadWalletNfts.requestId || 0) + 1;
+    if (!append) {
+      loadWalletNfts.requestId = requestId;
+      state.walletNftNext = 0;
+      els.walletNftGrid.innerHTML = "";
+      els.loadMoreWalletNfts.hidden = true;
+    }
+    state.walletNftLoading = true;
     els.refreshWalletNfts.disabled = true;
+    els.loadMoreWalletNfts.disabled = true;
     if (!state.walletAddress) {
       els.walletNftStatus.textContent = "Connect Kasware to load your NFTs.";
       els.walletNftGrid.innerHTML = "";
+      els.loadMoreWalletNfts.hidden = true;
+      state.walletNftLoading = false;
       els.refreshWalletNfts.disabled = false;
       return;
     }
-    els.walletNftStatus.textContent = "Loading wallet NFTs...";
-    els.walletNftGrid.innerHTML = "";
-    let offset = 0;
-    let total = 0;
+    els.walletNftStatus.textContent = append ? "Loading more wallet NFTs..." : "Loading wallet NFTs...";
+    els.loadMoreWalletNfts.textContent = "Loading...";
     try {
-      do {
-        const query = new URLSearchParams({ address: state.walletAddress, offset: String(offset), limit: "100" });
-        const data = await readJson(await fetch(`/api/kcc721/wallet-nfts?${query}`, { cache: "no-store" }));
-        if (requestId !== loadWalletNfts.requestId) return;
-        const items = Array.isArray(data.items) ? data.items : [];
-        total = Number(data.total || 0);
-        els.walletNftGrid.insertAdjacentHTML("beforeend", items.map((item) => `
-          <a class="kcc-wallet-nft-item" href="${escapeHtml(item.detailUrl)}">
-            <div class="kcc-wallet-nft-image">
-              <img src="${escapeHtml(item.imageUrl || "/assets/devtools-logo-uploaded.png?v=2")}" alt="${escapeHtml(item.name)}" loading="lazy" decoding="async" />
-            </div>
-            <div class="kcc-wallet-nft-copy">
-              <strong>${escapeHtml(item.name)}</strong>
-              <span>${escapeHtml(item.ticker)} #${escapeHtml(item.tokenId)}</span>
-              <span>${escapeHtml(item.nftId || item.custodyState)}</span>
-            </div>
-          </a>
-        `).join(""));
-        offset = data.next === null || data.next === undefined ? null : Number(data.next);
-        els.walletNftStatus.textContent = `${els.walletNftGrid.children.length.toLocaleString()} of ${total.toLocaleString()} NFTs loaded`;
-      } while (offset !== null);
+      const query = new URLSearchParams({
+        address: state.walletAddress,
+        offset: String(append ? state.walletNftNext : 0),
+        limit: String(WALLET_NFT_PAGE_SIZE),
+      });
+      const data = await readJson(await fetch(`/api/kcc721/wallet-nfts?${query}`, { cache: "no-store" }));
+      if (requestId !== loadWalletNfts.requestId) return;
+      const items = Array.isArray(data.items) ? data.items : [];
+      const total = Number(data.total || 0);
+      els.walletNftGrid.insertAdjacentHTML("beforeend", items.map((item) => `
+        <a class="kcc-wallet-nft-item" href="${escapeHtml(item.detailUrl)}">
+          <div class="kcc-wallet-nft-image">
+            <img src="${escapeHtml(item.imageUrl || "/assets/devtools-logo-uploaded.png?v=2")}" alt="${escapeHtml(item.name)}" loading="lazy" decoding="async" />
+          </div>
+          <div class="kcc-wallet-nft-copy">
+            <strong>${escapeHtml(item.name)}</strong>
+            <span>${escapeHtml(item.ticker)} #${escapeHtml(item.tokenId)}</span>
+            <span>${escapeHtml(item.nftId || item.custodyState)}</span>
+          </div>
+        </a>
+      `).join(""));
+      state.walletNftNext = data.next === null || data.next === undefined ? null : Number(data.next);
+      const loaded = els.walletNftGrid.children.length;
       els.walletNftStatus.textContent = total
-        ? `${total.toLocaleString()} KCC721 NFT${total === 1 ? "" : "s"} in this wallet`
+        ? `${loaded.toLocaleString()} of ${total.toLocaleString()} KCC721 NFTs loaded`
         : "No KCC721 NFTs currently held by this wallet.";
+      els.loadMoreWalletNfts.hidden = state.walletNftNext === null;
     } catch (error) {
       if (requestId === loadWalletNfts.requestId) els.walletNftStatus.textContent = error.message || String(error);
     } finally {
-      if (requestId === loadWalletNfts.requestId) els.refreshWalletNfts.disabled = false;
+      if (requestId === loadWalletNfts.requestId) {
+        state.walletNftLoading = false;
+        els.refreshWalletNfts.disabled = false;
+        els.loadMoreWalletNfts.disabled = false;
+        els.loadMoreWalletNfts.textContent = "Load more";
+      }
     }
   }
 
@@ -813,6 +842,7 @@
   });
   els.indexerRefresh.addEventListener("click", loadIndexer);
   els.refreshWalletNfts.addEventListener("click", () => loadWalletNfts());
+  els.loadMoreWalletNfts.addEventListener("click", () => loadWalletNfts({ append: true }));
   els.indexerSearch.addEventListener("input", () => {
     clearTimeout(els.indexerSearch._timer);
     els.indexerSearch._timer = setTimeout(loadIndexer, 250);

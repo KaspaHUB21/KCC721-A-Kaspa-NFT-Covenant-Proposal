@@ -1574,6 +1574,16 @@ select {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.kcc-wallet-nft-actions {
+  display: flex;
+  justify-content: center;
+  padding-top: 14px;
+}
+
+.kcc-wallet-nft-actions .button {
+  min-width: 132px;
+}
+
 .kcc-wallet-nft-item {
   background: #0d1516;
   border: 1px solid rgba(73, 232, 196, 0.28);
