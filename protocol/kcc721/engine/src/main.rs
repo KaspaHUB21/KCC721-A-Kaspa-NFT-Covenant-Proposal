@@ -2037,7 +2037,7 @@ fn build_batch_transfer_transaction(
         }
         if storage_mass > limits.storage {
             bail!(
-                "storage mass {storage_mass} exceeds Mainnet limit {}; use a larger funding UTXO or reduce the batch size",
+                "storage mass {storage_mass} exceeds Mainnet limit {}; select a smaller sufficient funding UTXO or reduce the batch size",
                 limits.storage
             );
         }

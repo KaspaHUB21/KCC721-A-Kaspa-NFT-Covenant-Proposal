@@ -77,6 +77,8 @@ Mainnet mass limits remain authoritative. With the reference v0.2 scripts,
 22 NFTs fit below the 500,000 Storage Mass ceiling, while the 23-NFT reference
 transaction exceeds it. Implementations MUST calculate contextual and
 non-contextual mass for the actual transaction before requesting a signature.
+Wallet integrations SHOULD choose the smallest sufficient plain funding UTXO,
+because its value affects contextual Storage Mass.
 
 An indexer MUST derive ownership from the latest accepted, unspent covenant
 outpoint. Planned recipients, KRC721 owners, metadata, or hosted registry rows

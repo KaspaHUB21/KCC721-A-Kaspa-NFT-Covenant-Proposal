@@ -340,7 +340,7 @@
     };
   }
 
-  async function selectFundingUtxoForMinimum(minimum, purpose = "operation") {
+  async function selectFundingUtxoForMinimum(minimum, purpose = "operation", { preferSmallest = false } = {}) {
     let raw = [];
     try {
       const query = new URLSearchParams({ address: state.walletAddress });
@@ -363,7 +363,13 @@
       .map(normalizeUtxo)
       .filter(Boolean)
       .filter((item) => !item.isCoinbase && BigInt(item.amount) >= minimum)
-      .sort((a, b) => (BigInt(a.amount) > BigInt(b.amount) ? -1 : 1));
+      .sort((a, b) => {
+        const left = BigInt(a.amount);
+        const right = BigInt(b.amount);
+        if (left === right) return 0;
+        if (preferSmallest) return left < right ? -1 : 1;
+        return left > right ? -1 : 1;
+      });
     if (!entries.length) {
       throw new Error(`The wallet needs one confirmed plain UTXO of at least ${Number(minimum) / 100_000_000} KAS for this ${purpose}.`);
     }
@@ -670,7 +676,11 @@
     els.prepareBatchTransfer.disabled = true;
     els.prepareBatchTransfer.textContent = "Reading wallet UTXOs...";
     try {
-      const fundingUtxo = await selectFundingUtxoForMinimum(BigInt(100_000_000), "atomic batch transfer");
+      const fundingUtxo = await selectFundingUtxoForMinimum(
+        BigInt(100_000_000),
+        "atomic batch transfer",
+        { preferSmallest: true },
+      );
       els.prepareBatchTransfer.textContent = "Building atomic transaction...";
       state.plan = await readJson(await withTimeout(fetch("/api/kcc721/prepare-batch-transfer", {
         method: "POST",

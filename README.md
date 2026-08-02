@@ -122,7 +122,9 @@ The reference limit is 22 because the complete 22-NFT transaction remains below
 Mainnet's 500,000 Storage Mass ceiling. The equivalent 23-NFT reference
 transaction reaches 503,252 Storage Mass and is rejected before Kasware is
 asked to sign. Implementations still calculate all mass dimensions from the
-actual transaction instead of relying only on this count.
+actual transaction instead of relying only on this count. Contextual Storage
+Mass also depends on the funding UTXO value, so the browser deliberately selects
+the smallest confirmed plain UTXO that safely covers the fee and minimum change.
 
 ### Native blind mint
 
