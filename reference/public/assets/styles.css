@@ -2124,6 +2124,84 @@ select {
   grid-column: 1 / -1;
 }
 
+.kcc-utxo-history {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.kcc-history-list {
+  border: 1px solid var(--line);
+}
+
+.kcc-history-entry {
+  background: rgba(255, 255, 255, 0.018);
+  border-left: 3px solid rgba(255, 255, 255, 0.18);
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px;
+}
+
+.kcc-history-entry + .kcc-history-entry {
+  border-top: 1px solid var(--line);
+}
+
+.kcc-history-entry.is-current {
+  background: rgba(73, 232, 196, 0.045);
+  border-left-color: var(--accent);
+}
+
+.kcc-history-entry header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.kcc-history-entry header div {
+  display: grid;
+  gap: 3px;
+}
+
+.kcc-history-entry header span,
+.kcc-history-entry header b {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.kcc-history-entry.is-current header b {
+  color: var(--accent);
+}
+
+.kcc-history-entry dl {
+  display: grid;
+  gap: 7px 14px;
+  grid-template-columns: 130px minmax(0, 1fr);
+  margin: 0;
+}
+
+.kcc-history-entry dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.kcc-history-entry dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.kcc-history-entry code {
+  color: #d8eeea;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  word-break: break-all;
+}
+
+.kcc-history-empty {
+  color: var(--muted);
+  margin: 0;
+  padding: 18px;
+}
+
 .kcc-raw-metadata pre {
   background: #080d0e;
   border: 1px solid var(--line);
@@ -2212,6 +2290,10 @@ select {
   }
 
   .kcc-browser-data {
+    grid-template-columns: 1fr;
+  }
+
+  .kcc-history-entry dl {
     grid-template-columns: 1fr;
   }
 

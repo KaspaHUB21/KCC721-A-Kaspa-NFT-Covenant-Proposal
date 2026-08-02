@@ -35,6 +35,13 @@ current owners, canonical ticker assignments, processed virtual-chain blocks,
 and undo records. Ownership is the owner key/address decoded from the live NFT
 covenant state, never a payload recipient or migration source record.
 
+The DevTools reference registry also persists one immutable history row for
+every accepted NFT output. Each row records the created outpoint, the consumed
+predecessor outpoint, full previous and new owner addresses, transition type,
+and acceptance time. NFT detail responses expose these rows in lineage order and
+mark only the current tip as unspent. Existing accepted operations are backfilled
+on startup so earlier mint, transfer, and atomic batch transitions remain visible.
+
 ## Reorganizations
 
 Removed virtual-chain blocks are rolled back in reverse accepted order. Added

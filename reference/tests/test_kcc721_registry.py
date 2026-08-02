@@ -539,6 +539,18 @@ class Kcc721RegistryTests(unittest.TestCase):
         self.assertEqual((old_wallet, old_total), ([], 0))
         self.assertEqual(new_total, 1)
         self.assertEqual(new_wallet[0]["nft_id"], "3" * 64)
+        history = server.db_list_kcc721_nft_history("3" * 64)
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[0]["eventType"], "mint")
+        self.assertEqual(history[0]["outpoint"], f"{'2' * 64}:1")
+        self.assertIsNone(history[0]["previousOutpoint"])
+        self.assertFalse(history[0]["isCurrent"])
+        self.assertEqual(history[1]["eventType"], "transfer")
+        self.assertEqual(history[1]["previousOutpoint"], f"{'2' * 64}:1")
+        self.assertEqual(history[1]["outpoint"], f"{'6' * 64}:0")
+        self.assertEqual(history[1]["fromAddress"], "kaspa:test")
+        self.assertEqual(history[1]["ownerAddress"], "kaspa:next-owner")
+        self.assertTrue(history[1]["isCurrent"])
 
     def test_accepted_atomic_batch_updates_all_owner_outpoints(self):
         collection_id = "b" * 64
@@ -578,6 +590,41 @@ class Kcc721RegistryTests(unittest.TestCase):
         self.assertEqual((second["owner_address"], second["outpoint_index"]), ("kaspa:new", 1))
         self.assertEqual(first["outpoint_txid"], "9" * 64)
         self.assertEqual(second["outpoint_txid"], "9" * 64)
+        first_history = server.db_list_kcc721_nft_history("1" * 64)
+        second_history = server.db_list_kcc721_nft_history("2" * 64)
+        self.assertEqual(first_history[0]["outpoint"], f"{'9' * 64}:0")
+        self.assertEqual(second_history[0]["outpoint"], f"{'9' * 64}:1")
+        self.assertEqual(first_history[0]["eventType"], "atomic batch transfer")
+
+    def test_history_backfill_rebuilds_saved_accepted_lineage_idempotently(self):
+        mint = self.operation(
+            id="1" * 32,
+            collectionId="b" * 64,
+            txid="2" * 64,
+            status="accepted",
+            nftId="3" * 64,
+            tokenId=7,
+            walletAddress="kaspa:first-owner",
+        )
+        transfer = self.operation(
+            id="4" * 32,
+            kind="nft-transfer",
+            collectionId="b" * 64,
+            txid="5" * 64,
+            status="accepted",
+            nftId="3" * 64,
+            tokenId=7,
+            walletAddress="kaspa:first-owner",
+            recipientAddress="kaspa:second-owner",
+        )
+        server.db_save_kcc721_operation(mint)
+        server.db_save_kcc721_operation(transfer)
+
+        self.assertEqual(server.backfill_kcc721_nft_history(), 2)
+        self.assertEqual(server.backfill_kcc721_nft_history(), 0)
+        history = server.db_list_kcc721_nft_history("3" * 64)
+        self.assertEqual([entry["eventType"] for entry in history], ["mint", "transfer"])
+        self.assertEqual(history[1]["previousOutpoint"], f"{'2' * 64}:1")
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ the public Mainnet lab:
 - direct KRC721-to-KCC721 migration issuance
 - single and atomic batch transfer support with wallet authorization
 - deterministic test vectors and executable covenant tests
-- a SQLite reference registry and browser test interface
+- a SQLite reference registry with per-NFT UTXO lineage and browser test interface
 - indexing and security profiles
 
 > KCC721 is a draft proposal. The test page creates real, irreversible Mainnet
@@ -248,7 +248,7 @@ python3 -m unittest discover -s tests -v
 The tests cover contract compilation, blind commit/reveal execution, transfers,
 arbitrary 1-based migration issuance, duplicate issue rejection, ticker
 canonicalization, owner updates, deployer custody views, malformed IPFS input,
-and Merkle proof verification.
+Merkle proof verification, and mint-to-transfer UTXO history chaining.
 
 ## Current status
 

@@ -14,6 +14,8 @@
     description: document.querySelector("#nftDescription"),
     data: document.querySelector("#nftData"),
     attributes: document.querySelector("#nftAttributes"),
+    history: document.querySelector("#nftHistory"),
+    historyCount: document.querySelector("#nftHistoryCount"),
     raw: document.querySelector("#nftRawMetadata"),
   };
 
@@ -36,6 +38,36 @@
   function showError(error) {
     els.loading.classList.add("error-text");
     els.loading.textContent = error.message || String(error);
+  }
+
+  function displayTime(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value || "Unknown");
+    return `${date.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "")} UTC`;
+  }
+
+  function renderHistory(history) {
+    const items = Array.isArray(history) ? history : [];
+    els.historyCount.textContent = `${items.length} ${items.length === 1 ? "outpoint" : "outpoints"}`;
+    if (!items.length) {
+      els.history.innerHTML = '<p class="kcc-history-empty">No live KCC721 UTXO has been issued for this NFT.</p>';
+      return;
+    }
+    els.history.innerHTML = items.map((entry) => `
+      <article class="kcc-history-entry${entry.isCurrent ? " is-current" : ""}">
+        <header>
+          <div><span>Step ${escapeHtml(entry.step)}</span><strong>${escapeHtml(entry.eventType)}</strong></div>
+          <b>${entry.isCurrent ? "UNSPENT" : "SPENT"}</b>
+        </header>
+        <dl>
+          <dt>Created outpoint</dt><dd><code>${escapeHtml(entry.outpoint)}</code></dd>
+          <dt>Spent outpoint</dt><dd>${entry.previousOutpoint ? `<code>${escapeHtml(entry.previousOutpoint)}</code>` : "Genesis"}</dd>
+          <dt>From</dt><dd>${entry.fromAddress ? `<code>${escapeHtml(entry.fromAddress)}</code>` : "Genesis"}</dd>
+          <dt>Owner</dt><dd><code>${escapeHtml(entry.ownerAddress)}</code></dd>
+          <dt>Accepted</dt><dd><time datetime="${escapeHtml(entry.acceptedAt)}">${escapeHtml(displayTime(entry.acceptedAt))}</time></dd>
+        </dl>
+      </article>
+    `).join("");
   }
 
   function render(item) {
@@ -87,6 +119,7 @@
     els.attributes.innerHTML = attributes.map((attribute) => `
       <div><span>${escapeHtml(attribute.trait_type || attribute.type || "Attribute")}</span><strong>${escapeHtml(attribute.value)}</strong></div>
     `).join("");
+    renderHistory(item.utxoHistory);
     els.raw.textContent = JSON.stringify(metadata, null, 2);
     els.loading.hidden = true;
     els.content.hidden = false;

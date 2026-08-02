@@ -6,7 +6,7 @@
     <title>KCC721 NFT | Kaspa Dev Tools</title>
     <meta name="theme-color" content="#101718" />
     <link rel="icon" href="/assets/devtools-logo-uploaded.png?v=2" />
-    <link rel="stylesheet" href="/assets/styles.css?v=25" />
+    <link rel="stylesheet" href="/assets/styles.css?v=28" />
   </head>
   <body>
     <div class="shell kcc721-shell">
@@ -38,6 +38,13 @@
             <dl class="kcc-browser-data" id="nftData"></dl>
             <div class="kcc-attributes" id="nftAttributes"></div>
           </div>
+          <section class="kcc-utxo-history" aria-labelledby="nftHistoryTitle">
+            <div class="kcc-gallery-head">
+              <div><p class="eyebrow">On-chain lineage</p><h2 id="nftHistoryTitle">UTXO History</h2></div>
+              <span id="nftHistoryCount"></span>
+            </div>
+            <div class="kcc-history-list" id="nftHistory"></div>
+          </section>
           <section class="kcc-raw-metadata">
             <div class="kcc-gallery-head"><div><p class="eyebrow">IPFS</p><h2>Raw Metadata</h2></div></div>
             <pre id="nftRawMetadata"></pre>
@@ -46,6 +53,6 @@
       </main>
     </div>
     <footer class="footer-glow"><a href="https://kaslab.space/">Developed by HUB21</a></footer>
-    <script src="/assets/kcc721-nft.js?v=5"></script>
+    <script src="/assets/kcc721-nft.js?v=6"></script>
   </body>
 </html>

@@ -202,6 +202,30 @@ def init_db() -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_kcc721_nfts_owner ON kcc721_nfts(owner_address, collection_id, token_id)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS kcc721_nft_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nft_id TEXT NOT NULL,
+                collection_id TEXT NOT NULL,
+                token_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                txid TEXT NOT NULL,
+                output_index INTEGER NOT NULL,
+                previous_txid TEXT,
+                previous_output_index INTEGER,
+                from_address TEXT,
+                owner_address TEXT NOT NULL,
+                accepted_at TEXT NOT NULL,
+                data TEXT NOT NULL,
+                UNIQUE(nft_id, txid, output_index)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_kcc721_nft_history_lineage "
+            "ON kcc721_nft_history(nft_id, id)"
+        )
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
         if "params" not in columns:
             conn.execute("ALTER TABLE jobs ADD COLUMN params TEXT")
@@ -703,6 +727,151 @@ def db_get_kcc721_nft_by_token(collection_id: str, token_id: int) -> dict:
     return dict(row) if row else {}
 
 
+def kcc721_operation_nft_events(operation: dict) -> list[dict]:
+    kind = operation.get("kind")
+    txid = operation.get("txid")
+    collection_id = operation.get("collectionId")
+    accepted_at = operation.get("updatedAt") or operation.get("createdAt") or now_iso()
+    if not txid or not collection_id or operation.get("status") != "accepted":
+        return []
+    common = {"collectionId": collection_id, "txid": txid, "acceptedAt": accepted_at}
+    if kind in ("blind-mint-reveal", "public-mint", "migration-issue"):
+        nft_id = operation.get("nftId")
+        if not nft_id:
+            return []
+        owner = operation.get("recipientAddress") if kind == "migration-issue" else operation.get("walletAddress")
+        return [{
+            **common,
+            "nftId": nft_id,
+            "tokenId": int(operation.get("tokenId") or 0),
+            "eventType": "migration issue" if kind == "migration-issue" else "mint",
+            "outputIndex": 1 if kind in ("public-mint", "migration-issue") else 0,
+            "fromAddress": "",
+            "ownerAddress": owner or "",
+            "operationId": operation.get("id"),
+        }]
+    if kind in ("collection-genesis", "migration-genesis"):
+        events = []
+        token_base = int((operation.get("manifest") or {}).get("tokenIdBase") or 0)
+        for offset, nft_id in enumerate(operation.get("nftIds") or []):
+            events.append({
+                **common,
+                "nftId": nft_id,
+                "tokenId": token_base + offset,
+                "eventType": "genesis allocation",
+                "outputIndex": offset + 1,
+                "fromAddress": "",
+                "ownerAddress": operation.get("walletAddress") or "",
+                "operationId": operation.get("id"),
+            })
+        return events
+    if kind == "nft-transfer" and operation.get("nftId"):
+        return [{
+            **common,
+            "nftId": operation["nftId"],
+            "tokenId": int(operation.get("tokenId") or 0),
+            "eventType": "transfer",
+            "outputIndex": 0,
+            "fromAddress": operation.get("walletAddress") or "",
+            "ownerAddress": operation.get("recipientAddress") or "",
+            "operationId": operation.get("id"),
+        }]
+    if kind == "nft-batch-transfer":
+        return [{
+            **common,
+            "collectionId": item.get("collectionId") or collection_id,
+            "nftId": item.get("nftId") or "",
+            "tokenId": int(item.get("tokenId") or 0),
+            "eventType": "atomic batch transfer",
+            "outputIndex": int(item.get("outputIndex") or 0),
+            "fromAddress": operation.get("walletAddress") or "",
+            "ownerAddress": operation.get("recipientAddress") or "",
+            "operationId": operation.get("id"),
+        } for item in operation.get("items") or [] if item.get("nftId")]
+    return []
+
+
+def db_record_kcc721_operation_history(operation: dict) -> int:
+    events = kcc721_operation_nft_events(operation)
+    if not events:
+        return 0
+    inserted = 0
+    with db_lock, db_connect() as conn:
+        for event in events:
+            previous = conn.execute(
+                """
+                SELECT txid, output_index FROM kcc721_nft_history
+                WHERE nft_id = ? ORDER BY id DESC LIMIT 1
+                """,
+                (event["nftId"],),
+            ).fetchone()
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO kcc721_nft_history(
+                    nft_id, collection_id, token_id, event_type, txid, output_index,
+                    previous_txid, previous_output_index, from_address, owner_address,
+                    accepted_at, data
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event["nftId"], event["collectionId"], event["tokenId"], event["eventType"],
+                    event["txid"], event["outputIndex"], previous["txid"] if previous else None,
+                    previous["output_index"] if previous else None, event["fromAddress"],
+                    event["ownerAddress"], event["acceptedAt"], json.dumps(event, sort_keys=True),
+                ),
+            )
+            inserted += int(cursor.rowcount > 0)
+    return inserted
+
+
+def backfill_kcc721_nft_history() -> int:
+    with db_lock, db_connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT data FROM kcc721_operations
+            WHERE status = 'accepted'
+            ORDER BY updated_at ASC, created_at ASC, id ASC
+            """
+        ).fetchall()
+    inserted = 0
+    for row in rows:
+        try:
+            inserted += db_record_kcc721_operation_history(json.loads(row["data"]))
+        except ValueError:
+            continue
+    return inserted
+
+
+def db_list_kcc721_nft_history(nft_id: str) -> list[dict]:
+    with db_lock, db_connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM kcc721_nft_history
+            WHERE nft_id = ? ORDER BY id ASC
+            """,
+            (nft_id,),
+        ).fetchall()
+    history = []
+    for index, row in enumerate(rows):
+        item = dict(row)
+        history.append({
+            "step": index + 1,
+            "eventType": item["event_type"],
+            "transactionId": item["txid"],
+            "outputIndex": item["output_index"],
+            "outpoint": f"{item['txid']}:{item['output_index']}",
+            "previousOutpoint": (
+                f"{item['previous_txid']}:{item['previous_output_index']}"
+                if item.get("previous_txid") is not None else None
+            ),
+            "fromAddress": item.get("from_address") or None,
+            "ownerAddress": item["owner_address"],
+            "acceptedAt": item["accepted_at"],
+            "isCurrent": index == len(rows) - 1,
+        })
+    return history
+
+
 def db_count_kcc721_collection_nfts(collection_id: str) -> int:
     with db_lock, db_connect() as conn:
         row = conn.execute(
@@ -979,7 +1148,7 @@ def db_cancel_matching_prepared_kcc721_batches(wallet_address: str, nft_ids: set
     return cancelled
 
 
-def db_index_kcc721_operation(operation: dict) -> None:
+def _db_index_kcc721_operation_state(operation: dict) -> None:
     manifest = operation.get("manifest") or {}
     collection_id = operation.get("collectionId")
     txid = operation.get("txid")
@@ -1248,6 +1417,11 @@ def db_index_kcc721_operation(operation: dict) -> None:
         operation["updatedAt"] = now_iso()
         db_save_kcc721_operation(operation)
         logger.warning("Rejected duplicate KCC721 ticker for transaction %s: %s", txid, exc)
+
+
+def db_index_kcc721_operation(operation: dict) -> None:
+    _db_index_kcc721_operation_state(operation)
+    db_record_kcc721_operation_history(operation)
 
 
 def kcc721_indexer_loop() -> None:
@@ -4251,6 +4425,7 @@ class DevToolsHandler(BaseHTTPRequestHandler):
                 metadata_error = str(exc)
             status = source.get("status") if isinstance(source.get("status"), dict) else {}
             indexed_nft = db_get_kcc721_nft_by_token(collection_id, token_id)
+            utxo_history = db_list_kcc721_nft_history(indexed_nft["nft_id"]) if indexed_nft else []
             kcc721_owner = indexed_nft.get("owner_address")
             if migration and not indexed_nft:
                 kcc721_owner = collection["deployer_address"]
@@ -4285,6 +4460,7 @@ class DevToolsHandler(BaseHTTPRequestHandler):
                     "metadataError": metadata_error,
                     "migrationStatus": "source NFT / not yet airdropped" if migration else None,
                     "canMigrationIssue": can_migration_issue,
+                    "utxoHistory": utxo_history,
                 },
             )
         except BadRequest as exc:
@@ -4617,6 +4793,8 @@ class DevToolsHandler(BaseHTTPRequestHandler):
 
 def main():
     init_db()
+    history_count = backfill_kcc721_nft_history()
+    logger.info("KCC721 UTXO history ready (%s indexed lineage entries added).", history_count)
     migrate_vault_indexes_to_db()
     migrate_job_payments_to_db()
     migrate_orphan_jobs_to_single_wallet()
