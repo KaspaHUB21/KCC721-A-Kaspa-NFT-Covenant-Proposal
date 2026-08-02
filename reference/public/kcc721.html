@@ -7,7 +7,7 @@
     <meta name="theme-color" content="#101718" />
     <link rel="icon" href="/assets/devtools-logo-uploaded.png?v=2" />
     <link rel="apple-touch-icon" href="/assets/devtools-logo-uploaded.png?v=2" />
-    <link rel="stylesheet" href="/assets/styles.css?v=26" />
+    <link rel="stylesheet" href="/assets/styles.css?v=27" />
   </head>
   <body>
     <div class="shell kcc721-shell">
@@ -154,9 +154,29 @@
                 <p class="eyebrow">Wallet collection</p>
                 <h2 id="walletNftsTitle">MY KCC721 NFTs</h2>
               </div>
-              <button class="icon-button" id="refreshWalletNfts" type="button" aria-label="Refresh wallet NFTs" title="Refresh wallet NFTs">&#x21BB;</button>
+              <div class="kcc-wallet-head-actions">
+                <button class="button secondary compact-button" id="toggleBatchTransfer" type="button">Batch transfer</button>
+                <button class="icon-button" id="refreshWalletNfts" type="button" aria-label="Refresh wallet NFTs" title="Refresh wallet NFTs">&#x21BB;</button>
+              </div>
             </div>
             <div class="kcc-wallet-nft-status" id="walletNftStatus">Connect Kasware to load your NFTs.</div>
+            <div class="kcc-atomic-batch" id="atomicBatchPanel" hidden>
+              <div class="notice info">
+                <strong>True atomic transfer</strong>
+                <span>All selected KCC721 NFTs move in one Mainnet transaction and one Kasware approval. If any NFT input fails, none of them move.</span>
+              </div>
+              <div class="kcc-atomic-batch-row">
+                <label>
+                  <span>Destination address</span>
+                  <input id="batchRecipientAddress" type="text" placeholder="kaspa:..." autocomplete="off" spellcheck="false" />
+                </label>
+                <div class="kcc-batch-count"><strong id="batchSelectedCount">0</strong><span>selected</span></div>
+              </div>
+              <div class="kcc-atomic-batch-actions">
+                <button class="button primary" id="prepareBatchTransfer" type="button" disabled>Prepare atomic transfer</button>
+                <button class="button secondary" id="clearBatchSelection" type="button">Clear</button>
+              </div>
+            </div>
             <div class="kcc-wallet-nft-grid" id="walletNftGrid"></div>
             <div class="kcc-wallet-nft-actions">
               <button class="button secondary" id="loadMoreWalletNfts" type="button" hidden>Load more</button>
@@ -213,6 +233,6 @@
       </div>
     </section>
     <div class="toast" id="kccToast" hidden></div>
-    <script src="/assets/kcc721.js?v=20"></script>
+    <script src="/assets/kcc721.js?v=21"></script>
   </body>
 </html>

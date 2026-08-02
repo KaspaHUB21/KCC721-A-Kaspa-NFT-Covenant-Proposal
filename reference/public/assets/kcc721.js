@@ -10,6 +10,8 @@
     broadcasting: false,
     walletNftNext: 0,
     walletNftLoading: false,
+    batchSelectionMode: false,
+    selectedNftIds: new Set(),
   };
   const els = {
     form: document.querySelector("#kcc721Form"),
@@ -48,6 +50,12 @@
     walletNftGrid: document.querySelector("#walletNftGrid"),
     refreshWalletNfts: document.querySelector("#refreshWalletNfts"),
     loadMoreWalletNfts: document.querySelector("#loadMoreWalletNfts"),
+    toggleBatchTransfer: document.querySelector("#toggleBatchTransfer"),
+    atomicBatchPanel: document.querySelector("#atomicBatchPanel"),
+    batchRecipientAddress: document.querySelector("#batchRecipientAddress"),
+    batchSelectedCount: document.querySelector("#batchSelectedCount"),
+    prepareBatchTransfer: document.querySelector("#prepareBatchTransfer"),
+    clearBatchSelection: document.querySelector("#clearBatchSelection"),
     toast: document.querySelector("#kccToast"),
     mintSuccessModal: document.querySelector("#mintSuccessModal"),
     mintSuccessImage: document.querySelector("#mintSuccessImage"),
@@ -120,6 +128,27 @@
     state.plan = null;
     els.riskConfirm.checked = false;
     renderPlan();
+  }
+
+  function updateBatchSelection() {
+    const count = state.selectedNftIds.size;
+    els.batchSelectedCount.textContent = String(count);
+    els.prepareBatchTransfer.disabled = count < 2 || count > 50;
+    els.walletNftGrid.querySelectorAll(".kcc-wallet-nft-item").forEach((card) => {
+      const selected = state.selectedNftIds.has(card.dataset.nftId);
+      card.classList.toggle("selected", selected);
+      const checkbox = card.querySelector(".kcc-nft-select input");
+      if (checkbox) checkbox.checked = selected;
+    });
+  }
+
+  function setBatchSelectionMode(enabled) {
+    state.batchSelectionMode = Boolean(enabled);
+    els.atomicBatchPanel.hidden = !state.batchSelectionMode;
+    els.toggleBatchTransfer.textContent = state.batchSelectionMode ? "Cancel batch" : "Batch transfer";
+    els.walletNftGrid.classList.toggle("selecting", state.batchSelectionMode);
+    if (!state.batchSelectionMode) state.selectedNftIds.clear();
+    updateBatchSelection();
   }
 
   async function connect() {
@@ -364,6 +393,8 @@
       ${plan.queuePosition ? `<div><span>Queue position</span><strong>${escapeHtml(plan.queuePosition)}</strong></div>` : ""}
       ${plan.tokenId !== undefined ? `<div><span>Token ID</span><strong>${escapeHtml(plan.tokenId)}</strong></div>` : ""}
       ${plan.nftId ? `<div><span>NFT ID</span><code>${escapeHtml(plan.nftId)}</code></div>` : ""}
+      ${plan.nftCount ? `<div><span>Atomic batch</span><strong>${escapeHtml(plan.nftCount)} NFTs</strong></div>` : ""}
+      ${plan.recipientAddress ? `<div><span>Recipient</span><code>${escapeHtml(plan.recipientAddress)}</code></div>` : ""}
       ${plan.migration ? `<div><span>Migration status</span><strong>${escapeHtml(plan.migration.status)}</strong></div>` : ""}
       ${plan.migration?.sourceDeployTransactionId ? `<div><span>KRC721 deploy tx</span><code>${escapeHtml(plan.migration.sourceDeployTransactionId)}</code></div>` : ""}
       ${plan.migration?.sourceDeployer ? `<div><span>KRC721 deployer</span><code>${escapeHtml(plan.migration.sourceDeployer)}</code></div>` : ""}
@@ -566,6 +597,8 @@
       state.walletNftNext = 0;
       els.walletNftGrid.innerHTML = "";
       els.loadMoreWalletNfts.hidden = true;
+      state.selectedNftIds.clear();
+      updateBatchSelection();
     }
     state.walletNftLoading = true;
     els.refreshWalletNfts.disabled = true;
@@ -591,17 +624,25 @@
       const items = Array.isArray(data.items) ? data.items : [];
       const total = Number(data.total || 0);
       els.walletNftGrid.insertAdjacentHTML("beforeend", items.map((item) => `
-        <a class="kcc-wallet-nft-item" href="${escapeHtml(item.detailUrl)}">
-          <div class="kcc-wallet-nft-image">
-            <img src="${escapeHtml(item.imageUrl || "/assets/devtools-logo-uploaded.png?v=2")}" alt="${escapeHtml(item.name)}" loading="lazy" decoding="async" />
-          </div>
-          <div class="kcc-wallet-nft-copy">
-            <strong>${escapeHtml(item.name)}</strong>
-            <span>${escapeHtml(item.ticker)} #${escapeHtml(item.tokenId)}</span>
-            <span>${escapeHtml(item.nftId || item.custodyState)}</span>
-          </div>
-        </a>
+        <article class="kcc-wallet-nft-item" data-nft-id="${escapeHtml(item.nftId || "")}">
+          ${item.nftId ? `<label class="kcc-nft-select" title="Select ${escapeHtml(item.name)}">
+            <input type="checkbox" value="${escapeHtml(item.nftId)}" aria-label="Select ${escapeHtml(item.name)} for atomic transfer" />
+            <span></span>
+          </label>` : ""}
+          <a class="kcc-wallet-nft-link" href="${escapeHtml(item.detailUrl)}">
+            <div class="kcc-wallet-nft-image">
+              <img src="${escapeHtml(item.imageUrl || "/assets/devtools-logo-uploaded.png?v=2")}" alt="${escapeHtml(item.name)}" loading="lazy" decoding="async" />
+            </div>
+            <div class="kcc-wallet-nft-copy">
+              <strong>${escapeHtml(item.name)}</strong>
+              <span>${escapeHtml(item.ticker)} #${escapeHtml(item.tokenId)}</span>
+              <span>${escapeHtml(item.nftId || item.custodyState)}</span>
+            </div>
+          </a>
+        </article>
       `).join(""));
+      els.walletNftGrid.classList.toggle("selecting", state.batchSelectionMode);
+      updateBatchSelection();
       state.walletNftNext = data.next === null || data.next === undefined ? null : Number(data.next);
       const loaded = els.walletNftGrid.children.length;
       els.walletNftStatus.textContent = total
@@ -617,6 +658,37 @@
         els.loadMoreWalletNfts.disabled = false;
         els.loadMoreWalletNfts.textContent = "Load more";
       }
+    }
+  }
+
+  async function prepareAtomicBatchTransfer() {
+    if (!state.walletAddress || !state.publicKey) await connect();
+    const nftIds = [...state.selectedNftIds];
+    if (nftIds.length < 2 || nftIds.length > 22) throw new Error("Select between 2 and 22 live KCC721 NFTs.");
+    const recipientAddress = els.batchRecipientAddress.value.trim().toLowerCase();
+    if (!recipientAddress.startsWith("kaspa:")) throw new Error("Enter a Mainnet Kaspa destination address.");
+    els.prepareBatchTransfer.disabled = true;
+    els.prepareBatchTransfer.textContent = "Reading wallet UTXOs...";
+    try {
+      const fundingUtxo = await selectFundingUtxoForMinimum(BigInt(100_000_000), "atomic batch transfer");
+      els.prepareBatchTransfer.textContent = "Building atomic transaction...";
+      state.plan = await readJson(await withTimeout(fetch("/api/kcc721/prepare-batch-transfer", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          walletAddress: state.walletAddress,
+          publicKey: state.publicKey,
+          recipientAddress,
+          nftIds,
+          fundingUtxo,
+        }),
+      }), "KCC721 atomic batch preparation timed out.", 60000));
+      els.riskConfirm.checked = false;
+      renderPlan();
+      toast(`${nftIds.length} NFTs prepared in one atomic Mainnet transaction.`);
+    } finally {
+      els.prepareBatchTransfer.textContent = "Prepare atomic transfer";
+      updateBatchSelection();
     }
   }
 
@@ -843,6 +915,24 @@
   els.indexerRefresh.addEventListener("click", loadIndexer);
   els.refreshWalletNfts.addEventListener("click", () => loadWalletNfts());
   els.loadMoreWalletNfts.addEventListener("click", () => loadWalletNfts({ append: true }));
+  els.toggleBatchTransfer.addEventListener("click", () => setBatchSelectionMode(!state.batchSelectionMode));
+  els.clearBatchSelection.addEventListener("click", () => {
+    state.selectedNftIds.clear();
+    updateBatchSelection();
+  });
+  els.prepareBatchTransfer.addEventListener("click", () => prepareAtomicBatchTransfer().catch((error) => toast(error.message || String(error))));
+  els.walletNftGrid.addEventListener("change", (event) => {
+    const checkbox = event.target.closest(".kcc-nft-select input");
+    if (!checkbox) return;
+    if (checkbox.checked && state.selectedNftIds.size >= 22) {
+      checkbox.checked = false;
+      toast("Mainnet Storage Mass limits one atomic batch to 22 NFTs.");
+      return;
+    }
+    if (checkbox.checked) state.selectedNftIds.add(checkbox.value);
+    else state.selectedNftIds.delete(checkbox.value);
+    updateBatchSelection();
+  });
   els.indexerSearch.addEventListener("input", () => {
     clearTimeout(els.indexerSearch._timer);
     els.indexerSearch._timer = setTimeout(loadIndexer, 250);

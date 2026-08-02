@@ -12,7 +12,7 @@ the public Mainnet lab:
 - a native Rust transaction builder for Kasware Safe JSON transactions
 - blind commit/reveal minting with random 1-based token IDs
 - direct KRC721-to-KCC721 migration issuance
-- transfer support with wallet authorization
+- single and atomic batch transfer support with wallet authorization
 - deterministic test vectors and executable covenant tests
 - a SQLite reference registry and browser test interface
 - indexing and security profiles
@@ -25,9 +25,9 @@ the public Mainnet lab:
 **[Open the KCC721 Mainnet lab](https://devtools.kaslab.space/kcc721)**
 
 The lab connects to Kasware. It can deploy a native collection, prepare a blind
-mint, transfer a live KCC721 NFT, or deploy and issue a KRC721 migration
-collection. Kasware signs the normal P2PK authorization input; the service never
-receives a private key.
+mint, transfer one live KCC721 NFT, atomically transfer 2 to 22 NFTs, or deploy
+and issue a KRC721 migration collection. Kasware signs the normal P2PK
+authorization input; the service never receives a private key.
 
 ## Why a covenant NFT?
 
@@ -46,6 +46,8 @@ The intended properties are:
    and disclosed only after payment is accepted.
 5. **One-time migration issuance.** Existing 1-based KRC721 IDs can be issued in
    arbitrary order, but a valid controller can never issue the same ID twice.
+6. **Atomic batch transfers.** Multiple NFTs move in one transaction and one
+   wallet approval. If any covenant input is invalid, none of the NFTs move.
 
 ## Repository layout
 
@@ -108,6 +110,20 @@ The transfer covenant preserves the first three fields. It verifies that a
 separate transaction input is a P2PK UTXO controlled by the current owner and
 that the successor keeps the NFT Covenant ID and required cell value.
 
+### Atomic batch transfer
+
+The builder can place 2 to 22 v0.2 NFT covenant inputs in one transaction. Each
+NFT validates its own successor output, and every covenant points to the same
+owner-authorized P2PK funding input. Kasware signs that input once. The result is
+one indivisible Mainnet transaction, including when selected NFTs come from
+different v0.2 collections held by the same wallet.
+
+The reference limit is 22 because the complete 22-NFT transaction remains below
+Mainnet's 500,000 Storage Mass ceiling. The equivalent 23-NFT reference
+transaction reaches 503,252 Storage Mass and is rejected before Kasware is
+asked to sign. Implementations still calculate all mass dimensions from the
+actual transaction instead of relying only on this count.
+
 ### Native blind mint
 
 Before deployment, the builder shuffles `1..maxSupply`, creates a random salt
@@ -166,7 +182,8 @@ acceptance before indexing the new controller or NFT outpoint.
 Collection controllers are singleton UTXOs. Concurrent requests for one
 collection must therefore be queued and rebuilt against the newest accepted
 controller outpoint. Independent collections and NFT transfers can execute in
-parallel.
+parallel. The registry reserves every NFT in a prepared atomic batch and commits
+all accepted owner/outpoint updates in one SQLite transaction.
 
 ## Indexing and ownership
 

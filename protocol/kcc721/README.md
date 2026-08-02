@@ -12,6 +12,13 @@ KCC721 remains a draft proposal.
 - `kcc721-v2-migration.sil`: arbitrary one-time issue of 1-based KRC721 IDs.
 - `engine/`: Kasware Safe JSON builder and covenant execution tests.
 
+The v0.2 engine supports true atomic transfers of 2 to 22 NFTs. Every NFT
+covenant is consumed and recreated in one transaction, while one final P2PK
+funding input authorizes the complete batch. Kasware therefore shows one
+approval. Consensus accepts either every transition or none of them. The
+22-NFT ceiling is enforced before signing because a 23-NFT reference batch
+exceeds Mainnet's 500,000 Storage Mass limit.
+
 The browser at `https://devtools.kaslab.space/kcc721` selects a normal wallet
 UTXO, asks the native engine to construct a transaction, and lets Kasware sign
 the P2PK authorization input. Private keys never reach the server.

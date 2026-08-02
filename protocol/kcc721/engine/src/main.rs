@@ -1,4 +1,7 @@
-use std::io::{self, Read};
+use std::{
+    collections::HashSet,
+    io::{self, Read},
+};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
@@ -35,6 +38,7 @@ const P2PK_COMPUTE_BUDGET: u16 = 10;
 const COVENANT_COMPUTE_BUDGET: u16 = 40;
 const MAX_GENESIS_PREMINT: u64 = 3;
 const SIGNATURE_SCRIPT_ESTIMATE: usize = 66;
+const MAX_ATOMIC_BATCH_NFTS: usize = 22;
 
 const NFT_SOURCE: &str = include_str!("../../kcc721-nft.sil");
 const COLLECTION_SOURCE: &str = include_str!("../../kcc721-collection.sil");
@@ -63,6 +67,7 @@ enum Command {
     PrepareV2Commit,
     PrepareV2Reveal,
     PrepareV2Transfer,
+    PrepareV2BatchTransfer,
     PrepareV2MigrationDeploy,
     PrepareV2MigrationIssue,
 }
@@ -211,6 +216,25 @@ struct TransferRequest {
     funding_utxo: FundingUtxo,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchTransferNftRequest {
+    collection_id: String,
+    nft_id: String,
+    token_id: u64,
+    metadata_uri: String,
+    nft_utxo: FundingUtxo,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchTransferRequest {
+    current_owner_public_key: String,
+    recipient_address: String,
+    nfts: Vec<BatchTransferNftRequest>,
+    funding_utxo: FundingUtxo,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CompileInfo {
@@ -327,6 +351,37 @@ struct TransferResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct BatchTransferItemResponse {
+    collection_id: String,
+    nft_id: String,
+    token_id: u64,
+    output_index: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchTransferResponse {
+    protocol: &'static str,
+    version: &'static str,
+    network: &'static str,
+    transaction_kind: &'static str,
+    tx_json_string: String,
+    sign_inputs: Vec<SignInput>,
+    transaction_id: String,
+    nft_count: usize,
+    items: Vec<BatchTransferItemResponse>,
+    previous_owner_address: String,
+    recipient_address: String,
+    recipient_public_key: String,
+    fee_sompi: String,
+    compute_mass: u64,
+    transient_mass: u64,
+    normalized_fee_mass: u64,
+    storage_mass: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SignInput {
     index: usize,
     sighash_type: u8,
@@ -400,13 +455,26 @@ fn main() -> Result<()> {
             let request: TransferRequest = read_stdin_json()?;
             println!("{}", serde_json::to_string(&prepare_v2_transfer(request)?)?);
         }
+        Command::PrepareV2BatchTransfer => {
+            let request: BatchTransferRequest = read_stdin_json()?;
+            println!(
+                "{}",
+                serde_json::to_string(&prepare_v2_batch_transfer(request)?)?
+            );
+        }
         Command::PrepareV2MigrationDeploy => {
             let request: V2MigrationDeployRequest = read_stdin_json()?;
-            println!("{}", serde_json::to_string(&prepare_v2_migration_deploy(request)?)?);
+            println!(
+                "{}",
+                serde_json::to_string(&prepare_v2_migration_deploy(request)?)?
+            );
         }
         Command::PrepareV2MigrationIssue => {
             let request: V2MigrationIssueRequest = read_stdin_json()?;
-            println!("{}", serde_json::to_string(&prepare_v2_migration_issue(request)?)?);
+            println!(
+                "{}",
+                serde_json::to_string(&prepare_v2_migration_issue(request)?)?
+            );
         }
     }
     Ok(())
@@ -492,7 +560,10 @@ fn prepare_v2_deploy(request: V2DeployRequest) -> Result<DeployResponse> {
         network: "mainnet",
         transaction_kind: "collection-genesis",
         tx_json_string: safe,
-        sign_inputs: vec![SignInput { index: 0, sighash_type: 1 }],
+        sign_inputs: vec![SignInput {
+            index: 0,
+            sighash_type: 1,
+        }],
         transaction_id: prepared.signable.tx.id().to_string(),
         collection_id: collection_id.to_string(),
         premint_nft_ids: vec![],
@@ -594,7 +665,10 @@ fn prepare_v2_migration_deploy(request: V2MigrationDeployRequest) -> Result<Depl
         network: "mainnet",
         transaction_kind: "migration-genesis",
         tx_json_string: safe,
-        sign_inputs: vec![SignInput { index: 0, sighash_type: 1 }],
+        sign_inputs: vec![SignInput {
+            index: 0,
+            sighash_type: 1,
+        }],
         transaction_id: prepared.signable.tx.id().to_string(),
         collection_id: collection_id.to_string(),
         premint_nft_ids: vec![],
@@ -624,14 +698,23 @@ fn prepare_v2_migration_issue(request: V2MigrationIssueRequest) -> Result<MintRe
     let deployer_address = Address::new(Prefix::Mainnet, AddressVersion::PubKey, &deployer);
     let recipient_address = Address::try_from(request.recipient_address.as_str())
         .context("recipientAddress is invalid")?;
-    if recipient_address.prefix != Prefix::Mainnet || recipient_address.version != AddressVersion::PubKey {
+    if recipient_address.prefix != Prefix::Mainnet
+        || recipient_address.version != AddressVersion::PubKey
+    {
         bail!("recipientAddress must be a Mainnet P2PK address");
     }
-    let recipient: [u8; 32] = recipient_address.payload.as_slice().try_into()
-        .map_err(|_| anyhow::anyhow!("recipientAddress must contain a 32-byte x-only public key"))?;
+    let recipient: [u8; 32] = recipient_address
+        .payload
+        .as_slice()
+        .try_into()
+        .map_err(|_| {
+            anyhow::anyhow!("recipientAddress must contain a 32-byte x-only public key")
+        })?;
     let current_root = decode_bytes32(&request.current_unissued_root, "currentUnissuedRoot")?;
     let next_root = decode_bytes32(&request.next_unissued_root, "nextUnissuedRoot")?;
-    let siblings: Vec<[u8; 32]> = request.siblings.iter()
+    let siblings: Vec<[u8; 32]> = request
+        .siblings
+        .iter()
         .map(|value| decode_bytes32(value, "Merkle sibling"))
         .collect::<Result<_>>()?;
     let mut live_data = request.token_id.to_le_bytes().to_vec();
@@ -642,9 +725,15 @@ fn prepare_v2_migration_issue(request: V2MigrationIssueRequest) -> Result<MintRe
     let mut spent_node: [u8; 32] = Sha256::digest(&spent_data).into();
     for (sibling, direction) in siblings.iter().zip(request.directions.iter()) {
         let (live_branch, spent_branch) = if *direction == 0 {
-            ([live_node.as_slice(), sibling.as_slice()].concat(), [spent_node.as_slice(), sibling.as_slice()].concat())
+            (
+                [live_node.as_slice(), sibling.as_slice()].concat(),
+                [spent_node.as_slice(), sibling.as_slice()].concat(),
+            )
         } else {
-            ([sibling.as_slice(), live_node.as_slice()].concat(), [sibling.as_slice(), spent_node.as_slice()].concat())
+            (
+                [sibling.as_slice(), live_node.as_slice()].concat(),
+                [sibling.as_slice(), spent_node.as_slice()].concat(),
+            )
         };
         live_node = Sha256::digest(live_branch).into();
         spent_node = Sha256::digest(spent_branch).into();
@@ -655,12 +744,23 @@ fn prepare_v2_migration_issue(request: V2MigrationIssueRequest) -> Result<MintRe
     let metadata_digest: [u8; 32] = Sha256::digest(request.metadata_uri.as_bytes()).into();
     let nft_template = v2_nft_template_parts()?;
     let current = compile_v2_migration(
-        deployer, request.supply, metadata_digest, current_root, request.remaining, &nft_template,
+        deployer,
+        request.supply,
+        metadata_digest,
+        current_root,
+        request.remaining,
+        &nft_template,
     )?;
     let next = compile_v2_migration(
-        deployer, request.supply, metadata_digest, next_root, request.remaining - 1, &nft_template,
+        deployer,
+        request.supply,
+        metadata_digest,
+        next_root,
+        request.remaining - 1,
+        &nft_template,
     )?;
-    let controller_entry = parse_funding_with_covenant(&request.controller_utxo, Some(collection_id))?;
+    let controller_entry =
+        parse_funding_with_covenant(&request.controller_utxo, Some(collection_id))?;
     if controller_entry.script_public_key != pay_to_script_hash_script(&current.script)
         || controller_entry.amount != CONTROLLER_CELL_VALUE
     {
@@ -675,55 +775,89 @@ fn prepare_v2_migration_issue(request: V2MigrationIssueRequest) -> Result<MintRe
         ("maxSupply", Expr::int(i64::try_from(request.supply)?)),
         ("metadataDigest", Expr::bytes(metadata_digest.to_vec())),
         ("unissuedRoot", Expr::bytes(next_root.to_vec())),
-        ("remaining", Expr::int(i64::try_from(request.remaining - 1)?)),
+        (
+            "remaining",
+            Expr::int(i64::try_from(request.remaining - 1)?),
+        ),
     ]);
-    let mut witness = current.build_sig_script_for_covenant_decl(
-        "issue",
-        vec![
-            next_state,
-            Expr::int(i64::try_from(request.token_id)?),
-            Expr::bytes(recipient.to_vec()),
-            Expr::int(1),
-            Expr::int(1),
-            Expr::from(siblings.iter().map(|value| value.to_vec()).collect::<Vec<_>>()),
-            Expr::bytes(request.directions.clone()),
-        ],
-        CovenantDeclCallOptions { is_leader: true },
-    ).map_err(|error| anyhow::anyhow!("cannot build migration issue witness: {error}"))?;
-    witness.extend_from_slice(&ScriptBuilder::with_flags(EngineFlags { covenants_enabled: true, ..Default::default() })
-        .add_data(&current.script)?.drain());
-    let controller_outpoint = TransactionOutpoint::new(
-        request.controller_utxo.transaction_id.parse()?, request.controller_utxo.index,
+    let mut witness = current
+        .build_sig_script_for_covenant_decl(
+            "issue",
+            vec![
+                next_state,
+                Expr::int(i64::try_from(request.token_id)?),
+                Expr::bytes(recipient.to_vec()),
+                Expr::int(1),
+                Expr::int(1),
+                Expr::from(
+                    siblings
+                        .iter()
+                        .map(|value| value.to_vec())
+                        .collect::<Vec<_>>(),
+                ),
+                Expr::bytes(request.directions.clone()),
+            ],
+            CovenantDeclCallOptions { is_leader: true },
+        )
+        .map_err(|error| anyhow::anyhow!("cannot build migration issue witness: {error}"))?;
+    witness.extend_from_slice(
+        &ScriptBuilder::with_flags(EngineFlags {
+            covenants_enabled: true,
+            ..Default::default()
+        })
+        .add_data(&current.script)?
+        .drain(),
     );
-    let nft = compile_v2_nft(collection_id.as_bytes(), request.token_id, metadata_digest, recipient)?;
-    let nft_unbound = TransactionOutput::new(NFT_CELL_VALUE, pay_to_script_hash_script(&nft.script));
+    let controller_outpoint = TransactionOutpoint::new(
+        request.controller_utxo.transaction_id.parse()?,
+        request.controller_utxo.index,
+    );
+    let nft = compile_v2_nft(
+        collection_id.as_bytes(),
+        request.token_id,
+        metadata_digest,
+        recipient,
+    )?;
+    let nft_unbound =
+        TransactionOutput::new(NFT_CELL_VALUE, pay_to_script_hash_script(&nft.script));
     let nft_id = covenant_id(controller_outpoint, std::iter::once((1u32, &nft_unbound)));
     let outputs = vec![
         TransactionOutput::with_covenant(
-            CONTROLLER_CELL_VALUE, pay_to_script_hash_script(&next.script), Some(CovenantBinding::new(0, collection_id)),
+            CONTROLLER_CELL_VALUE,
+            pay_to_script_hash_script(&next.script),
+            Some(CovenantBinding::new(0, collection_id)),
         ),
         TransactionOutput::with_covenant(
-            NFT_CELL_VALUE, nft_unbound.script_public_key, Some(CovenantBinding::new(0, nft_id)),
+            NFT_CELL_VALUE,
+            nft_unbound.script_public_key,
+            Some(CovenantBinding::new(0, nft_id)),
         ),
     ];
     let prepared = build_mint_transaction(
         controller_outpoint,
         controller_entry,
         witness,
-        TransactionOutpoint::new(request.funding_utxo.transaction_id.parse()?, request.funding_utxo.index),
+        TransactionOutpoint::new(
+            request.funding_utxo.transaction_id.parse()?,
+            request.funding_utxo.index,
+        ),
         funding_entry,
         outputs,
         pay_to_address_script(&deployer_address),
         0,
         0,
     )?;
-    let safe = SerializableTransaction::from_signable_transaction(&prepared.signable)?.serialize_to_json()?;
+    let safe = SerializableTransaction::from_signable_transaction(&prepared.signable)?
+        .serialize_to_json()?;
     Ok(MintResponse {
         protocol: "kcc-721",
         network: "mainnet",
         transaction_kind: "migration-issue",
         tx_json_string: safe,
-        sign_inputs: vec![SignInput { index: 1, sighash_type: 1 }],
+        sign_inputs: vec![SignInput {
+            index: 1,
+            sighash_type: 1,
+        }],
         transaction_id: prepared.signable.tx.id().to_string(),
         collection_id: collection_id.to_string(),
         nft_id: nft_id.to_string(),
@@ -752,14 +886,27 @@ fn prepare_v2_commit(request: V2CommitRequest) -> Result<V2CommitResponse> {
     let nft_template = v2_nft_template_parts()?;
     let ticket_template = v2_ticket_template_parts(&nft_template)?;
     let current = compile_v2_collection(
-        deployer, request.supply, metadata_digest, shuffle_root, mint_price, mint_daa,
-        request.next_mint_index, &ticket_template,
+        deployer,
+        request.supply,
+        metadata_digest,
+        shuffle_root,
+        mint_price,
+        mint_daa,
+        request.next_mint_index,
+        &ticket_template,
     )?;
     let next = compile_v2_collection(
-        deployer, request.supply, metadata_digest, shuffle_root, mint_price, mint_daa,
-        request.next_mint_index + 1, &ticket_template,
+        deployer,
+        request.supply,
+        metadata_digest,
+        shuffle_root,
+        mint_price,
+        mint_daa,
+        request.next_mint_index + 1,
+        &ticket_template,
     )?;
-    let controller_entry = parse_funding_with_covenant(&request.controller_utxo, Some(collection_id))?;
+    let controller_entry =
+        parse_funding_with_covenant(&request.controller_utxo, Some(collection_id))?;
     if controller_entry.script_public_key != pay_to_script_hash_script(&current.script) {
         bail!("controller UTXO does not match the v0.2 collection state");
     }
@@ -769,16 +916,26 @@ fn prepare_v2_commit(request: V2CommitRequest) -> Result<V2CommitResponse> {
         bail!("funding UTXO must belong to the recipient wallet");
     }
     let ticket = compile_v2_ticket(
-        &nft_template, collection_id.as_bytes(), request.next_mint_index, request.supply,
-        metadata_digest, shuffle_root, recipient,
+        &nft_template,
+        collection_id.as_bytes(),
+        request.next_mint_index,
+        request.supply,
+        metadata_digest,
+        shuffle_root,
+        recipient,
     )?;
     let controller_outpoint = TransactionOutpoint::new(
-        request.controller_utxo.transaction_id.parse()?, request.controller_utxo.index,
+        request.controller_utxo.transaction_id.parse()?,
+        request.controller_utxo.index,
     );
     let ticket_unbound = TransactionOutput::new(
-        BLIND_TICKET_VALUE, pay_to_script_hash_script(&ticket.script),
+        BLIND_TICKET_VALUE,
+        pay_to_script_hash_script(&ticket.script),
     );
-    let ticket_id = covenant_id(controller_outpoint, std::iter::once((1u32, &ticket_unbound)));
+    let ticket_id = covenant_id(
+        controller_outpoint,
+        std::iter::once((1u32, &ticket_unbound)),
+    );
     let next_state = struct_object(vec![
         ("deployer", Expr::bytes(deployer.to_vec())),
         ("maxSupply", Expr::int(i64::try_from(request.supply)?)),
@@ -786,47 +943,96 @@ fn prepare_v2_commit(request: V2CommitRequest) -> Result<V2CommitResponse> {
         ("shuffleRoot", Expr::bytes(shuffle_root.to_vec())),
         ("mintPrice", Expr::int(i64::try_from(mint_price)?)),
         ("mintDaaScore", Expr::int(i64::try_from(mint_daa)?)),
-        ("nextMintIndex", Expr::int(i64::try_from(request.next_mint_index + 1)?)),
+        (
+            "nextMintIndex",
+            Expr::int(i64::try_from(request.next_mint_index + 1)?),
+        ),
     ]);
     let payment_output_index = if mint_price > 0 { 2 } else { -1 };
-    let mut witness = current.build_sig_script_for_covenant_decl(
-        "commit",
-        vec![next_state, Expr::bytes(recipient.to_vec()), Expr::int(1), Expr::int(payment_output_index)],
-        CovenantDeclCallOptions { is_leader: true },
-    ).map_err(|error| anyhow::anyhow!("cannot build v0.2 commit witness: {error}"))?;
-    witness.extend_from_slice(&ScriptBuilder::with_flags(EngineFlags { covenants_enabled: true, ..Default::default() })
-        .add_data(&current.script)?.drain());
+    let mut witness = current
+        .build_sig_script_for_covenant_decl(
+            "commit",
+            vec![
+                next_state,
+                Expr::bytes(recipient.to_vec()),
+                Expr::int(1),
+                Expr::int(payment_output_index),
+            ],
+            CovenantDeclCallOptions { is_leader: true },
+        )
+        .map_err(|error| anyhow::anyhow!("cannot build v0.2 commit witness: {error}"))?;
+    witness.extend_from_slice(
+        &ScriptBuilder::with_flags(EngineFlags {
+            covenants_enabled: true,
+            ..Default::default()
+        })
+        .add_data(&current.script)?
+        .drain(),
+    );
     let mut outputs = vec![
-        TransactionOutput::with_covenant(CONTROLLER_CELL_VALUE, pay_to_script_hash_script(&next.script), Some(CovenantBinding::new(0, collection_id))),
-        TransactionOutput::with_covenant(BLIND_TICKET_VALUE, ticket_unbound.script_public_key, Some(CovenantBinding::new(0, ticket_id))),
+        TransactionOutput::with_covenant(
+            CONTROLLER_CELL_VALUE,
+            pay_to_script_hash_script(&next.script),
+            Some(CovenantBinding::new(0, collection_id)),
+        ),
+        TransactionOutput::with_covenant(
+            BLIND_TICKET_VALUE,
+            ticket_unbound.script_public_key,
+            Some(CovenantBinding::new(0, ticket_id)),
+        ),
     ];
     if mint_price > 0 {
         let deployer_address = Address::new(Prefix::Mainnet, AddressVersion::PubKey, &deployer);
-        outputs.push(TransactionOutput::new(mint_price, pay_to_address_script(&deployer_address)));
+        outputs.push(TransactionOutput::new(
+            mint_price,
+            pay_to_address_script(&deployer_address),
+        ));
     }
     let commit_locked = mint_price
         .checked_add(BLIND_TICKET_VALUE - NFT_CELL_VALUE)
         .context("blind mint locked value overflow")?;
     let prepared = build_mint_transaction(
-        controller_outpoint, controller_entry, witness,
-        TransactionOutpoint::new(request.funding_utxo.transaction_id.parse()?, request.funding_utxo.index),
-        funding_entry, outputs, pay_to_address_script(&recipient_address), commit_locked, mint_daa,
+        controller_outpoint,
+        controller_entry,
+        witness,
+        TransactionOutpoint::new(
+            request.funding_utxo.transaction_id.parse()?,
+            request.funding_utxo.index,
+        ),
+        funding_entry,
+        outputs,
+        pay_to_address_script(&recipient_address),
+        commit_locked,
+        mint_daa,
     )?;
-    let safe = SerializableTransaction::from_signable_transaction(&prepared.signable)?.serialize_to_json()?;
+    let safe = SerializableTransaction::from_signable_transaction(&prepared.signable)?
+        .serialize_to_json()?;
     Ok(V2CommitResponse {
-        protocol: "kcc-721", version: "0.2.0", network: "mainnet",
-        transaction_kind: "blind-mint-commit", tx_json_string: safe,
-        sign_inputs: vec![SignInput { index: 1, sighash_type: 1 }],
-        transaction_id: prepared.signable.tx.id().to_string(), collection_id: collection_id.to_string(),
-        ticket_id: ticket_id.to_string(), mint_index: request.next_mint_index,
-        recipient_address: recipient_address.to_string(), fee_sompi: prepared.fee.to_string(),
-        storage_mass: prepared.storage_mass, ticket_value_sompi: BLIND_TICKET_VALUE.to_string(),
+        protocol: "kcc-721",
+        version: "0.2.0",
+        network: "mainnet",
+        transaction_kind: "blind-mint-commit",
+        tx_json_string: safe,
+        sign_inputs: vec![SignInput {
+            index: 1,
+            sighash_type: 1,
+        }],
+        transaction_id: prepared.signable.tx.id().to_string(),
+        collection_id: collection_id.to_string(),
+        ticket_id: ticket_id.to_string(),
+        mint_index: request.next_mint_index,
+        recipient_address: recipient_address.to_string(),
+        fee_sompi: prepared.fee.to_string(),
+        storage_mass: prepared.storage_mass,
+        ticket_value_sompi: BLIND_TICKET_VALUE.to_string(),
     })
 }
 
 fn prepare_v2_reveal(request: V2RevealRequest) -> Result<V2RevealResponse> {
-    if request.mint_index < 1 || request.mint_index > request.supply
-        || request.token_id < 1 || request.token_id > request.supply
+    if request.mint_index < 1
+        || request.mint_index > request.supply
+        || request.token_id < 1
+        || request.token_id > request.supply
     {
         bail!("mintIndex and tokenId must be within 1..maxSupply");
     }
@@ -841,7 +1047,9 @@ fn prepare_v2_reveal(request: V2RevealRequest) -> Result<V2RevealResponse> {
     let recipient = decode_pubkey(&request.recipient_public_key, "recipientPublicKey")?;
     let shuffle_root = decode_bytes32(&request.shuffle_root, "shuffleRoot")?;
     let salt = decode_bytes32(&request.salt, "salt")?;
-    let siblings: Vec<[u8; 32]> = request.siblings.iter()
+    let siblings: Vec<[u8; 32]> = request
+        .siblings
+        .iter()
         .map(|value| decode_bytes32(value, "Merkle sibling"))
         .collect::<Result<_>>()?;
     let mut leaf_data = Vec::with_capacity(48);
@@ -866,8 +1074,13 @@ fn prepare_v2_reveal(request: V2RevealRequest) -> Result<V2RevealResponse> {
     let metadata_digest: [u8; 32] = Sha256::digest(request.metadata_uri.as_bytes()).into();
     let nft_template = v2_nft_template_parts()?;
     let ticket = compile_v2_ticket(
-        &nft_template, collection_id.as_bytes(), request.mint_index, request.supply,
-        metadata_digest, shuffle_root, recipient,
+        &nft_template,
+        collection_id.as_bytes(),
+        request.mint_index,
+        request.supply,
+        metadata_digest,
+        shuffle_root,
+        recipient,
     )?;
     let ticket_entry = parse_funding_with_covenant(&request.ticket_utxo, Some(ticket_id))?;
     if ticket_entry.script_public_key != pay_to_script_hash_script(&ticket.script)
@@ -876,38 +1089,70 @@ fn prepare_v2_reveal(request: V2RevealRequest) -> Result<V2RevealResponse> {
         bail!("ticket UTXO does not match the blind mint commitment");
     }
     let ticket_outpoint = TransactionOutpoint::new(
-        request.ticket_utxo.transaction_id.parse()?, request.ticket_utxo.index,
+        request.ticket_utxo.transaction_id.parse()?,
+        request.ticket_utxo.index,
     );
-    let nft = compile_v2_nft(collection_id.as_bytes(), request.token_id, metadata_digest, recipient)?;
-    let nft_unbound = TransactionOutput::new(NFT_CELL_VALUE, pay_to_script_hash_script(&nft.script));
+    let nft = compile_v2_nft(
+        collection_id.as_bytes(),
+        request.token_id,
+        metadata_digest,
+        recipient,
+    )?;
+    let nft_unbound =
+        TransactionOutput::new(NFT_CELL_VALUE, pay_to_script_hash_script(&nft.script));
     let nft_id = covenant_id(ticket_outpoint, std::iter::once((0u32, &nft_unbound)));
-    let mut witness = ticket.build_sig_script_for_covenant_decl(
-        "reveal",
-        vec![
-            Expr::from(Vec::<Expr>::new()),
-            Expr::int(i64::try_from(request.token_id)?),
-            Expr::bytes(salt.to_vec()),
-            Expr::from(siblings.iter().map(|value| value.to_vec()).collect::<Vec<_>>()),
-            Expr::bytes(request.directions.clone()),
-            Expr::int(0),
-        ],
-        CovenantDeclCallOptions { is_leader: true },
-    ).map_err(|error| anyhow::anyhow!("cannot build v0.2 reveal witness: {error}"))?;
-    witness.extend_from_slice(&ScriptBuilder::with_flags(EngineFlags { covenants_enabled: true, ..Default::default() })
-        .add_data(&ticket.script)?.drain());
+    let mut witness = ticket
+        .build_sig_script_for_covenant_decl(
+            "reveal",
+            vec![
+                Expr::from(Vec::<Expr>::new()),
+                Expr::int(i64::try_from(request.token_id)?),
+                Expr::bytes(salt.to_vec()),
+                Expr::from(
+                    siblings
+                        .iter()
+                        .map(|value| value.to_vec())
+                        .collect::<Vec<_>>(),
+                ),
+                Expr::bytes(request.directions.clone()),
+                Expr::int(0),
+            ],
+            CovenantDeclCallOptions { is_leader: true },
+        )
+        .map_err(|error| anyhow::anyhow!("cannot build v0.2 reveal witness: {error}"))?;
+    witness.extend_from_slice(
+        &ScriptBuilder::with_flags(EngineFlags {
+            covenants_enabled: true,
+            ..Default::default()
+        })
+        .add_data(&ticket.script)?
+        .drain(),
+    );
     let output = TransactionOutput::with_covenant(
-        NFT_CELL_VALUE, nft_unbound.script_public_key, Some(CovenantBinding::new(0, nft_id)),
+        NFT_CELL_VALUE,
+        nft_unbound.script_public_key,
+        Some(CovenantBinding::new(0, nft_id)),
     );
     let prepared = build_v2_reveal_transaction(ticket_outpoint, ticket_entry, witness, output)?;
-    let safe = SerializableTransaction::from_signable_transaction(&prepared.signable)?.serialize_to_json()?;
+    let safe = SerializableTransaction::from_signable_transaction(&prepared.signable)?
+        .serialize_to_json()?;
     let recipient_address = Address::new(Prefix::Mainnet, AddressVersion::PubKey, &recipient);
     Ok(V2RevealResponse {
-        protocol: "kcc-721", version: "0.2.0", network: "mainnet",
-        transaction_kind: "blind-mint-reveal", tx_json_string: safe, sign_inputs: vec![],
-        transaction_id: prepared.signable.tx.id().to_string(), collection_id: collection_id.to_string(),
-        ticket_id: ticket_id.to_string(), nft_id: nft_id.to_string(), mint_index: request.mint_index,
-        token_id: request.token_id, recipient_address: recipient_address.to_string(),
-        fee_sompi: prepared.fee.to_string(), storage_mass: prepared.storage_mass,
+        protocol: "kcc-721",
+        version: "0.2.0",
+        network: "mainnet",
+        transaction_kind: "blind-mint-reveal",
+        tx_json_string: safe,
+        sign_inputs: vec![],
+        transaction_id: prepared.signable.tx.id().to_string(),
+        collection_id: collection_id.to_string(),
+        ticket_id: ticket_id.to_string(),
+        nft_id: nft_id.to_string(),
+        mint_index: request.mint_index,
+        token_id: request.token_id,
+        recipient_address: recipient_address.to_string(),
+        fee_sompi: prepared.fee.to_string(),
+        storage_mass: prepared.storage_mass,
     })
 }
 
@@ -919,7 +1164,152 @@ fn prepare_v2_transfer(request: TransferRequest) -> Result<TransferResponse> {
     prepare_transfer_with_version(request, true)
 }
 
-fn prepare_transfer_with_version(request: TransferRequest, is_v2: bool) -> Result<TransferResponse> {
+fn prepare_v2_batch_transfer(request: BatchTransferRequest) -> Result<BatchTransferResponse> {
+    if !(2..=MAX_ATOMIC_BATCH_NFTS).contains(&request.nfts.len()) {
+        bail!("an atomic batch must contain between 2 and {MAX_ATOMIC_BATCH_NFTS} NFTs");
+    }
+    let current_owner = decode_pubkey(&request.current_owner_public_key, "currentOwnerPublicKey")?;
+    let owner_address = Address::new(Prefix::Mainnet, AddressVersion::PubKey, &current_owner);
+    let recipient_address = Address::try_from(request.recipient_address.as_str())
+        .context("recipientAddress is invalid")?;
+    if recipient_address.prefix != Prefix::Mainnet
+        || recipient_address.version != AddressVersion::PubKey
+    {
+        bail!("recipientAddress must be a Mainnet P2PK address");
+    }
+    let recipient: [u8; 32] = recipient_address
+        .payload
+        .as_slice()
+        .try_into()
+        .map_err(|_| {
+            anyhow::anyhow!("recipientAddress must contain a 32-byte x-only public key")
+        })?;
+    let funding_entry = parse_funding(&request.funding_utxo)?;
+    if funding_entry.script_public_key != pay_to_address_script(&owner_address) {
+        bail!("funding UTXO must belong to the current NFT owner");
+    }
+
+    let owner_input_index = request.nfts.len();
+    let mut nft_ids = HashSet::new();
+    let mut outpoints = HashSet::new();
+    let mut covenant_inputs = Vec::with_capacity(request.nfts.len());
+    let mut fixed_outputs = Vec::with_capacity(request.nfts.len());
+    let mut response_items = Vec::with_capacity(request.nfts.len());
+    for (index, item) in request.nfts.iter().enumerate() {
+        let collection_id: kaspa_consensus_core::Hash = item.collection_id.parse()?;
+        let nft_id: kaspa_consensus_core::Hash = item.nft_id.parse()?;
+        if !nft_ids.insert(nft_id) {
+            bail!("the batch contains the same NFT more than once");
+        }
+        let outpoint =
+            TransactionOutpoint::new(item.nft_utxo.transaction_id.parse()?, item.nft_utxo.index);
+        if !outpoints.insert(outpoint) {
+            bail!("the batch contains the same NFT outpoint more than once");
+        }
+        if item.token_id == 0 || item.token_id > i64::MAX as u64 {
+            bail!("tokenId must be within the v0.2 covenant integer range");
+        }
+        if !item.metadata_uri.starts_with("ipfs://") || item.metadata_uri.len() > 256 {
+            bail!("metadataUri must be an immutable ipfs:// URI");
+        }
+        let metadata_digest: [u8; 32] = Sha256::digest(item.metadata_uri.as_bytes()).into();
+        let current_nft = compile_v2_nft(
+            collection_id.as_bytes(),
+            item.token_id,
+            metadata_digest,
+            current_owner,
+        )?;
+        let next_nft = compile_v2_nft(
+            collection_id.as_bytes(),
+            item.token_id,
+            metadata_digest,
+            recipient,
+        )?;
+        let nft_entry = parse_funding_with_covenant(&item.nft_utxo, Some(nft_id))?;
+        if nft_entry.script_public_key != pay_to_script_hash_script(&current_nft.script)
+            || nft_entry.amount != NFT_CELL_VALUE
+        {
+            bail!("NFT UTXO does not match the declared token state");
+        }
+        let next_state = struct_object(vec![
+            (
+                "collectionId",
+                Expr::bytes(collection_id.as_bytes().to_vec()),
+            ),
+            ("tokenId", Expr::int(i64::try_from(item.token_id)?)),
+            ("metadataDigest", Expr::bytes(metadata_digest.to_vec())),
+            ("owner", Expr::bytes(recipient.to_vec())),
+        ]);
+        let mut witness = current_nft
+            .build_sig_script_for_covenant_decl(
+                "transfer",
+                vec![next_state, Expr::int(i64::try_from(owner_input_index)?)],
+                CovenantDeclCallOptions { is_leader: true },
+            )
+            .map_err(|error| anyhow::anyhow!("cannot build NFT batch transfer witness: {error}"))?;
+        witness.extend_from_slice(
+            &ScriptBuilder::with_flags(EngineFlags {
+                covenants_enabled: true,
+                ..Default::default()
+            })
+            .add_data(&current_nft.script)
+            .map_err(|error| anyhow::anyhow!("cannot append NFT redeem script: {error}"))?
+            .drain(),
+        );
+        covenant_inputs.push((outpoint, nft_entry, witness));
+        fixed_outputs.push(TransactionOutput::with_covenant(
+            NFT_CELL_VALUE,
+            pay_to_script_hash_script(&next_nft.script),
+            Some(CovenantBinding::new(u16::try_from(index)?, nft_id)),
+        ));
+        response_items.push(BatchTransferItemResponse {
+            collection_id: collection_id.to_string(),
+            nft_id: nft_id.to_string(),
+            token_id: item.token_id,
+            output_index: index,
+        });
+    }
+
+    let prepared = build_batch_transfer_transaction(
+        covenant_inputs,
+        TransactionOutpoint::new(
+            request.funding_utxo.transaction_id.parse()?,
+            request.funding_utxo.index,
+        ),
+        funding_entry,
+        fixed_outputs,
+        pay_to_address_script(&owner_address),
+    )?;
+    let safe = SerializableTransaction::from_signable_transaction(&prepared.signable)?
+        .serialize_to_json()?;
+    Ok(BatchTransferResponse {
+        protocol: "kcc-721",
+        version: "0.2.0",
+        network: "mainnet",
+        transaction_kind: "nft-batch-transfer",
+        tx_json_string: safe,
+        sign_inputs: vec![SignInput {
+            index: owner_input_index,
+            sighash_type: 1,
+        }],
+        transaction_id: prepared.signable.tx.id().to_string(),
+        nft_count: response_items.len(),
+        items: response_items,
+        previous_owner_address: owner_address.to_string(),
+        recipient_address: recipient_address.to_string(),
+        recipient_public_key: hex::encode(recipient),
+        fee_sompi: prepared.fee.to_string(),
+        compute_mass: prepared.compute_mass,
+        transient_mass: prepared.transient_mass,
+        normalized_fee_mass: prepared.normalized_fee_mass,
+        storage_mass: prepared.storage_mass,
+    })
+}
+
+fn prepare_transfer_with_version(
+    request: TransferRequest,
+    is_v2: bool,
+) -> Result<TransferResponse> {
     let collection_id: kaspa_consensus_core::Hash = request.collection_id.parse()?;
     let nft_id: kaspa_consensus_core::Hash = request.nft_id.parse()?;
     let current_owner = decode_pubkey(&request.current_owner_public_key, "currentOwnerPublicKey")?;
@@ -945,14 +1335,34 @@ fn prepare_transfer_with_version(request: TransferRequest, is_v2: bool) -> Resul
     }
     let metadata_digest: [u8; 32] = Sha256::digest(request.metadata_uri.as_bytes()).into();
     let current_nft = if is_v2 {
-        compile_v2_nft(collection_id.as_bytes(), request.token_id, metadata_digest, current_owner)?
+        compile_v2_nft(
+            collection_id.as_bytes(),
+            request.token_id,
+            metadata_digest,
+            current_owner,
+        )?
     } else {
-        compile_nft(collection_id.as_bytes(), request.token_id, metadata_digest, current_owner)?
+        compile_nft(
+            collection_id.as_bytes(),
+            request.token_id,
+            metadata_digest,
+            current_owner,
+        )?
     };
     let next_nft = if is_v2 {
-        compile_v2_nft(collection_id.as_bytes(), request.token_id, metadata_digest, recipient)?
+        compile_v2_nft(
+            collection_id.as_bytes(),
+            request.token_id,
+            metadata_digest,
+            recipient,
+        )?
     } else {
-        compile_nft(collection_id.as_bytes(), request.token_id, metadata_digest, recipient)?
+        compile_nft(
+            collection_id.as_bytes(),
+            request.token_id,
+            metadata_digest,
+            recipient,
+        )?
     };
     let nft_entry = parse_funding_with_covenant(&request.nft_utxo, Some(nft_id))?;
     if nft_entry.script_public_key != pay_to_script_hash_script(&current_nft.script)
@@ -1539,6 +1949,22 @@ fn build_transfer_transaction(
     fixed_outputs: Vec<TransactionOutput>,
     change_spk: kaspa_consensus_core::tx::ScriptPublicKey,
 ) -> Result<PreparedTransaction> {
+    build_batch_transfer_transaction(
+        vec![(nft_outpoint, nft_entry, nft_witness)],
+        funding_outpoint,
+        funding_entry,
+        fixed_outputs,
+        change_spk,
+    )
+}
+
+fn build_batch_transfer_transaction(
+    covenant_inputs: Vec<(TransactionOutpoint, UtxoEntry, Vec<u8>)>,
+    funding_outpoint: TransactionOutpoint,
+    funding_entry: UtxoEntry,
+    fixed_outputs: Vec<TransactionOutput>,
+    change_spk: kaspa_consensus_core::tx::ScriptPublicKey,
+) -> Result<PreparedTransaction> {
     let mut fee = 0u64;
     let calculator = MassCalculator::new_with_consensus_params(&MAINNET_PARAMS);
     let cofactors = MAINNET_PARAMS.mempool_block_mass_cofactors().raw_post();
@@ -1553,20 +1979,23 @@ fn build_transfer_transaction(
         }
         let mut outputs = fixed_outputs.clone();
         outputs.push(TransactionOutput::new(change, change_spk.clone()));
-        let inputs = vec![
-            TransactionInput::new_with_mass(
-                nft_outpoint,
-                nft_witness.clone(),
-                0,
-                ComputeCommit::ComputeBudget(ComputeBudget(COVENANT_COMPUTE_BUDGET)),
-            ),
-            TransactionInput::new_with_mass(
-                funding_outpoint,
-                vec![0; SIGNATURE_SCRIPT_ESTIMATE],
-                0,
-                ComputeCommit::ComputeBudget(ComputeBudget(P2PK_COMPUTE_BUDGET)),
-            ),
-        ];
+        let mut inputs = covenant_inputs
+            .iter()
+            .map(|(outpoint, _, witness)| {
+                TransactionInput::new_with_mass(
+                    *outpoint,
+                    witness.clone(),
+                    0,
+                    ComputeCommit::ComputeBudget(ComputeBudget(COVENANT_COMPUTE_BUDGET)),
+                )
+            })
+            .collect::<Vec<_>>();
+        inputs.push(TransactionInput::new_with_mass(
+            funding_outpoint,
+            vec![0; SIGNATURE_SCRIPT_ESTIMATE],
+            0,
+            ComputeCommit::ComputeBudget(ComputeBudget(P2PK_COMPUTE_BUDGET)),
+        ));
         let mut tx = Transaction::new(
             TX_VERSION_TOCCATA,
             inputs,
@@ -1576,7 +2005,11 @@ fn build_transfer_transaction(
             0,
             vec![],
         );
-        let entries = vec![nft_entry.clone(), funding_entry.clone()];
+        let mut entries = covenant_inputs
+            .iter()
+            .map(|(_, entry, _)| entry.clone())
+            .collect::<Vec<_>>();
+        entries.push(funding_entry.clone());
         let populated = SignableTransaction::with_entries(tx.clone(), entries.clone());
         let non_contextual = calculator.calc_non_contextual_masses(&tx);
         let normalized_fee_mass = non_contextual.normalized_max(&cofactors);
@@ -1587,14 +2020,29 @@ fn build_transfer_transaction(
             .calc_contextual_masses(&populated.as_verifiable())
             .context("storage mass is not computable")?
             .storage_mass;
-        let storage_limit = MAINNET_PARAMS.block_mass_limits().raw_post().storage;
-        if storage_mass > storage_limit {
+        let limits = MAINNET_PARAMS.block_mass_limits().raw_post();
+        if non_contextual.compute_mass > limits.compute {
             bail!(
-                "storage mass {storage_mass} exceeds Mainnet limit {storage_limit}; use a larger funding UTXO"
+                "compute mass {} exceeds Mainnet limit {}; reduce the batch size",
+                non_contextual.compute_mass,
+                limits.compute
+            );
+        }
+        if non_contextual.transient_mass > limits.transient {
+            bail!(
+                "transient mass {} exceeds Mainnet limit {}; reduce the batch size",
+                non_contextual.transient_mass,
+                limits.transient
+            );
+        }
+        if storage_mass > limits.storage {
+            bail!(
+                "storage mass {storage_mass} exceeds Mainnet limit {}; use a larger funding UTXO or reduce the batch size",
+                limits.storage
             );
         }
         tx.set_storage_mass(storage_mass);
-        tx.inputs[1].signature_script.clear();
+        tx.inputs[covenant_inputs.len()].signature_script.clear();
         final_result = Some(PreparedTransaction {
             signable: SignableTransaction::with_entries(tx, entries),
             fee: next_fee,
@@ -1940,17 +2388,9 @@ mod tests {
     fn v2_blind_mint_templates_compile_with_one_based_ids() {
         let nft = v2_nft_template_parts().unwrap();
         let ticket = v2_ticket_template_parts(&nft).unwrap();
-        let controller = compile_v2_collection(
-            [1; 32],
-            287,
-            [2; 32],
-            [3; 32],
-            300_000_000,
-            0,
-            1,
-            &ticket,
-        )
-        .unwrap();
+        let controller =
+            compile_v2_collection([1; 32], 287, [2; 32], [3; 32], 300_000_000, 0, 1, &ticket)
+                .unwrap();
         let first = compile_v2_nft([4; 32], 1, [2; 32], [5; 32]).unwrap();
         let last = compile_v2_nft([4; 32], 287, [2; 32], [5; 32]).unwrap();
         assert!(!controller.script.is_empty());
@@ -1973,7 +2413,8 @@ mod tests {
         let root: [u8; 32] = Sha256::digest(&leaf).into();
         let nft_template = v2_nft_template_parts().unwrap();
         let ticket_template = v2_ticket_template_parts(&nft_template).unwrap();
-        let current = compile_v2_collection(owner, 1, metadata, root, 0, 0, 1, &ticket_template).unwrap();
+        let current =
+            compile_v2_collection(owner, 1, metadata, root, 0, 0, 1, &ticket_template).unwrap();
         let commit = prepare_v2_commit(V2CommitRequest {
             collection_id: collection_id.to_string(),
             deployer_public_key: hex::encode(owner),
@@ -1985,34 +2426,57 @@ mod tests {
             mint_daa_score: "0".into(),
             next_mint_index: 1,
             controller_utxo: FundingUtxo {
-                transaction_id: "66".repeat(32), index: 0,
+                transaction_id: "66".repeat(32),
+                index: 0,
                 amount: CONTROLLER_CELL_VALUE.to_string(),
                 script_public_key: spk_hex(&pay_to_script_hash_script(&current.script)),
-                block_daa_score: "210000000".into(), is_coinbase: false,
+                block_daa_score: "210000000".into(),
+                is_coinbase: false,
             },
             funding_utxo: FundingUtxo {
-                transaction_id: "77".repeat(32), index: 0, amount: "200000000".into(),
+                transaction_id: "77".repeat(32),
+                index: 0,
+                amount: "200000000".into(),
                 script_public_key: spk_hex(&pay_to_address_script(&owner_address)),
-                block_daa_score: "210000000".into(), is_coinbase: false,
+                block_daa_score: "210000000".into(),
+                is_coinbase: false,
             },
-        }).unwrap();
+        })
+        .unwrap();
         execute_covenant_input(&commit.tx_json_string, 0);
 
         let ticket = compile_v2_ticket(
-            &nft_template, collection_id.as_bytes(), 1, 1, metadata, root, owner,
-        ).unwrap();
+            &nft_template,
+            collection_id.as_bytes(),
+            1,
+            1,
+            metadata,
+            root,
+            owner,
+        )
+        .unwrap();
         let reveal = prepare_v2_reveal(V2RevealRequest {
-            collection_id: collection_id.to_string(), recipient_public_key: hex::encode(owner),
-            supply: 1, metadata_uri: uri.into(), shuffle_root: hex::encode(root),
-            mint_index: 1, token_id: 1, salt: hex::encode(salt), siblings: vec![],
-            directions: vec![], ticket_id: commit.ticket_id,
+            collection_id: collection_id.to_string(),
+            recipient_public_key: hex::encode(owner),
+            supply: 1,
+            metadata_uri: uri.into(),
+            shuffle_root: hex::encode(root),
+            mint_index: 1,
+            token_id: 1,
+            salt: hex::encode(salt),
+            siblings: vec![],
+            directions: vec![],
+            ticket_id: commit.ticket_id,
             ticket_utxo: FundingUtxo {
-                transaction_id: commit.transaction_id, index: 1,
+                transaction_id: commit.transaction_id,
+                index: 1,
                 amount: BLIND_TICKET_VALUE.to_string(),
                 script_public_key: spk_hex(&pay_to_script_hash_script(&ticket.script)),
-                block_daa_score: "210000000".into(), is_coinbase: false,
+                block_daa_score: "210000000".into(),
+                is_coinbase: false,
             },
-        }).unwrap();
+        })
+        .unwrap();
         execute_covenant_input(&reveal.tx_json_string, 0);
         assert_eq!(reveal.token_id, 1);
 
@@ -2023,20 +2487,131 @@ mod tests {
             token_id: 1,
             metadata_uri: uri.into(),
             current_owner_public_key: hex::encode(owner),
-            recipient_address: Address::new(Prefix::Mainnet, AddressVersion::PubKey, &[2u8; 32]).to_string(),
+            recipient_address: Address::new(Prefix::Mainnet, AddressVersion::PubKey, &[2u8; 32])
+                .to_string(),
             nft_utxo: FundingUtxo {
-                transaction_id: reveal.transaction_id, index: 0,
+                transaction_id: reveal.transaction_id,
+                index: 0,
                 amount: NFT_CELL_VALUE.to_string(),
                 script_public_key: spk_hex(&pay_to_script_hash_script(&live_nft.script)),
-                block_daa_score: "210000000".into(), is_coinbase: false,
+                block_daa_score: "210000000".into(),
+                is_coinbase: false,
             },
             funding_utxo: FundingUtxo {
-                transaction_id: "88".repeat(32), index: 0, amount: "200000000".into(),
+                transaction_id: "88".repeat(32),
+                index: 0,
+                amount: "200000000".into(),
                 script_public_key: spk_hex(&pay_to_address_script(&owner_address)),
-                block_daa_score: "210000000".into(), is_coinbase: false,
+                block_daa_score: "210000000".into(),
+                is_coinbase: false,
             },
-        }).unwrap();
+        })
+        .unwrap();
         execute_covenant_input(&transfer.tx_json_string, 0);
+    }
+
+    #[test]
+    fn v2_atomic_batch_executes_every_nft_covenant() {
+        let owner = [1u8; 32];
+        let recipient = [2u8; 32];
+        let owner_address = Address::new(Prefix::Mainnet, AddressVersion::PubKey, &owner);
+        let collection_id = kaspa_consensus_core::Hash::from_bytes([9; 32]);
+        let uri = "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3wljymbk7buz4m5v2l3k4m5aa";
+        let metadata: [u8; 32] = Sha256::digest(uri.as_bytes()).into();
+        let nfts = (1u8..=3)
+            .map(|token_id| {
+                let nft_id = kaspa_consensus_core::Hash::from_bytes([token_id; 32]);
+                let nft =
+                    compile_v2_nft(collection_id.as_bytes(), token_id.into(), metadata, owner)
+                        .unwrap();
+                BatchTransferNftRequest {
+                    collection_id: collection_id.to_string(),
+                    nft_id: nft_id.to_string(),
+                    token_id: token_id.into(),
+                    metadata_uri: uri.into(),
+                    nft_utxo: FundingUtxo {
+                        transaction_id: hex::encode([token_id + 20; 32]),
+                        index: 0,
+                        amount: NFT_CELL_VALUE.to_string(),
+                        script_public_key: spk_hex(&pay_to_script_hash_script(&nft.script)),
+                        block_daa_score: "210000000".into(),
+                        is_coinbase: false,
+                    },
+                }
+            })
+            .collect();
+        let batch = prepare_v2_batch_transfer(BatchTransferRequest {
+            current_owner_public_key: hex::encode(owner),
+            recipient_address: Address::new(Prefix::Mainnet, AddressVersion::PubKey, &recipient)
+                .to_string(),
+            nfts,
+            funding_utxo: FundingUtxo {
+                transaction_id: "88".repeat(32),
+                index: 0,
+                amount: "500000000".into(),
+                script_public_key: spk_hex(&pay_to_address_script(&owner_address)),
+                block_daa_score: "210000000".into(),
+                is_coinbase: false,
+            },
+        })
+        .unwrap();
+        assert_eq!(batch.nft_count, 3);
+        assert_eq!(batch.sign_inputs[0].index, 3);
+        for input_index in 0..batch.nft_count {
+            execute_covenant_input(&batch.tx_json_string, input_index);
+        }
+    }
+
+    #[test]
+    fn v2_atomic_batch_of_twenty_two_stays_within_mainnet_mass_limits() {
+        let owner = [1u8; 32];
+        let recipient = [2u8; 32];
+        let owner_address = Address::new(Prefix::Mainnet, AddressVersion::PubKey, &owner);
+        let collection_id = kaspa_consensus_core::Hash::from_bytes([9; 32]);
+        let uri = "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3wljymbk7buz4m5v2l3k4m5aa";
+        let metadata: [u8; 32] = Sha256::digest(uri.as_bytes()).into();
+        let nfts = (1u8..=22)
+            .map(|token_id| {
+                let nft_id = kaspa_consensus_core::Hash::from_bytes([token_id; 32]);
+                let nft =
+                    compile_v2_nft(collection_id.as_bytes(), token_id.into(), metadata, owner)
+                        .unwrap();
+                BatchTransferNftRequest {
+                    collection_id: collection_id.to_string(),
+                    nft_id: nft_id.to_string(),
+                    token_id: token_id.into(),
+                    metadata_uri: uri.into(),
+                    nft_utxo: FundingUtxo {
+                        transaction_id: hex::encode([token_id + 50; 32]),
+                        index: 0,
+                        amount: NFT_CELL_VALUE.to_string(),
+                        script_public_key: spk_hex(&pay_to_script_hash_script(&nft.script)),
+                        block_daa_score: "210000000".into(),
+                        is_coinbase: false,
+                    },
+                }
+            })
+            .collect();
+        let batch = prepare_v2_batch_transfer(BatchTransferRequest {
+            current_owner_public_key: hex::encode(owner),
+            recipient_address: Address::new(Prefix::Mainnet, AddressVersion::PubKey, &recipient)
+                .to_string(),
+            nfts,
+            funding_utxo: FundingUtxo {
+                transaction_id: "88".repeat(32),
+                index: 0,
+                amount: "100000000".into(),
+                script_public_key: spk_hex(&pay_to_address_script(&owner_address)),
+                block_daa_score: "210000000".into(),
+                is_coinbase: false,
+            },
+        })
+        .unwrap();
+        let limits = MAINNET_PARAMS.block_mass_limits().raw_post();
+        assert_eq!(batch.nft_count, 22);
+        assert!(batch.compute_mass <= limits.compute);
+        assert!(batch.transient_mass <= limits.transient);
+        assert!(batch.storage_mass <= limits.storage);
     }
 
     #[test]
@@ -2057,8 +2632,10 @@ mod tests {
         let first_leaf: [u8; 32] = Sha256::digest(first_live).into();
         let second_leaf: [u8; 32] = Sha256::digest(second_live).into();
         let second_spent_leaf: [u8; 32] = Sha256::digest(second_spent).into();
-        let root: [u8; 32] = Sha256::digest([first_leaf.as_slice(), second_leaf.as_slice()].concat()).into();
-        let next_root: [u8; 32] = Sha256::digest([first_leaf.as_slice(), second_spent_leaf.as_slice()].concat()).into();
+        let root: [u8; 32] =
+            Sha256::digest([first_leaf.as_slice(), second_leaf.as_slice()].concat()).into();
+        let next_root: [u8; 32] =
+            Sha256::digest([first_leaf.as_slice(), second_spent_leaf.as_slice()].concat()).into();
         let nft_template = v2_nft_template_parts().unwrap();
         let current = compile_v2_migration(owner, 2, metadata, root, 2, &nft_template).unwrap();
         let issue = prepare_v2_migration_issue(V2MigrationIssueRequest {
@@ -2074,22 +2651,29 @@ mod tests {
             siblings: vec![hex::encode(first_leaf)],
             directions: vec![1],
             controller_utxo: FundingUtxo {
-                transaction_id: "99".repeat(32), index: 0,
+                transaction_id: "99".repeat(32),
+                index: 0,
                 amount: CONTROLLER_CELL_VALUE.to_string(),
                 script_public_key: spk_hex(&pay_to_script_hash_script(&current.script)),
-                block_daa_score: "210000000".into(), is_coinbase: false,
+                block_daa_score: "210000000".into(),
+                is_coinbase: false,
             },
             funding_utxo: FundingUtxo {
-                transaction_id: "aa".repeat(32), index: 0, amount: "200000000".into(),
+                transaction_id: "aa".repeat(32),
+                index: 0,
+                amount: "200000000".into(),
                 script_public_key: spk_hex(&pay_to_address_script(&owner_address)),
-                block_daa_score: "210000000".into(), is_coinbase: false,
+                block_daa_score: "210000000".into(),
+                is_coinbase: false,
             },
-        }).unwrap();
+        })
+        .unwrap();
         execute_covenant_input(&issue.tx_json_string, 0);
         assert_eq!(issue.token_id, 2);
         assert_eq!(issue.recipient_address, recipient_address.to_string());
 
-        let advanced = compile_v2_migration(owner, 2, metadata, next_root, 1, &nft_template).unwrap();
+        let advanced =
+            compile_v2_migration(owner, 2, metadata, next_root, 1, &nft_template).unwrap();
         let duplicate = prepare_v2_migration_issue(V2MigrationIssueRequest {
             collection_id: collection_id.to_string(),
             deployer_public_key: hex::encode(owner),
@@ -2103,15 +2687,20 @@ mod tests {
             siblings: vec![hex::encode(first_leaf)],
             directions: vec![1],
             controller_utxo: FundingUtxo {
-                transaction_id: issue.transaction_id, index: 0,
+                transaction_id: issue.transaction_id,
+                index: 0,
                 amount: CONTROLLER_CELL_VALUE.to_string(),
                 script_public_key: spk_hex(&pay_to_script_hash_script(&advanced.script)),
-                block_daa_score: "210000001".into(), is_coinbase: false,
+                block_daa_score: "210000001".into(),
+                is_coinbase: false,
             },
             funding_utxo: FundingUtxo {
-                transaction_id: "bb".repeat(32), index: 0, amount: "200000000".into(),
+                transaction_id: "bb".repeat(32),
+                index: 0,
+                amount: "200000000".into(),
                 script_public_key: spk_hex(&pay_to_address_script(&owner_address)),
-                block_daa_score: "210000001".into(), is_coinbase: false,
+                block_daa_score: "210000001".into(),
+                is_coinbase: false,
             },
         });
         assert!(duplicate.is_err());
@@ -2120,16 +2709,28 @@ mod tests {
     fn execute_covenant_input(tx_json: &str, input_index: usize) {
         let serialized = SerializableTransaction::deserialize_from_json(tx_json).unwrap();
         let signable: SignableTransaction = serialized.try_into().unwrap();
-        let entries = signable.entries.iter().cloned().map(Option::unwrap).collect();
+        let entries = signable
+            .entries
+            .iter()
+            .cloned()
+            .map(Option::unwrap)
+            .collect();
         let populated = PopulatedTransaction::new(&signable.tx, entries);
         let covenants = CovenantsContext::from_tx(&populated).unwrap();
         let reused = SigHashReusedValuesUnsync::new();
         let cache = Cache::new(128);
         let mut engine = TxScriptEngine::from_transaction_input(
-            &populated, &populated.tx.inputs[input_index], input_index,
+            &populated,
+            &populated.tx.inputs[input_index],
+            input_index,
             populated.utxo(input_index).unwrap(),
-            EngineCtx::new(&cache).with_reused(&reused).with_covenants_ctx(&covenants),
-            EngineFlags { covenants_enabled: true, sigop_script_units: 0.into() },
+            EngineCtx::new(&cache)
+                .with_reused(&reused)
+                .with_covenants_ctx(&covenants),
+            EngineFlags {
+                covenants_enabled: true,
+                sigop_script_units: 0.into(),
+            },
         );
         engine.execute().unwrap();
     }

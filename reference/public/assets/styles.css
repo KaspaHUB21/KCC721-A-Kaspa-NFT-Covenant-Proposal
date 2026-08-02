@@ -1561,6 +1561,66 @@ select {
   margin: 3px 0 0;
 }
 
+.kcc-wallet-head-actions,
+.kcc-atomic-batch-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.compact-button {
+  min-height: 36px;
+  padding: 7px 11px;
+}
+
+.kcc-atomic-batch {
+  border: 1px solid rgba(73, 232, 196, 0.42);
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px;
+}
+
+.kcc-atomic-batch .notice {
+  margin: 0;
+}
+
+.kcc-atomic-batch-row {
+  align-items: end;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) 72px;
+}
+
+.kcc-atomic-batch-row label {
+  display: grid;
+  gap: 6px;
+}
+
+.kcc-atomic-batch-row label > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.kcc-batch-count {
+  align-items: center;
+  border: 1px solid rgba(73, 232, 196, 0.26);
+  display: grid;
+  justify-items: center;
+  min-height: 48px;
+}
+
+.kcc-batch-count strong {
+  color: var(--accent);
+  font-size: 18px;
+}
+
+.kcc-batch-count span {
+  color: var(--muted);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
 .kcc-wallet-nft-status {
   color: var(--muted);
   font-size: 12px;
@@ -1592,10 +1652,57 @@ select {
   min-width: 0;
   overflow: hidden;
   text-decoration: none;
+  position: relative;
 }
 
 .kcc-wallet-nft-item:hover {
   border-color: rgba(73, 232, 196, 0.72);
+}
+
+.kcc-wallet-nft-item.selected {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.kcc-wallet-nft-link {
+  color: inherit;
+  display: grid;
+  min-width: 0;
+  text-decoration: none;
+}
+
+.kcc-nft-select {
+  cursor: pointer;
+  display: none;
+  left: 8px;
+  position: absolute;
+  top: 8px;
+  z-index: 2;
+}
+
+.kcc-wallet-nft-grid.selecting .kcc-nft-select {
+  display: block;
+}
+
+.kcc-nft-select input {
+  height: 1px;
+  opacity: 0;
+  position: absolute;
+  width: 1px;
+}
+
+.kcc-nft-select span {
+  background: #07100f;
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  display: block;
+  height: 24px;
+  width: 24px;
+}
+
+.kcc-nft-select input:checked + span {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 5px #07100f;
 }
 
 .kcc-wallet-nft-image {

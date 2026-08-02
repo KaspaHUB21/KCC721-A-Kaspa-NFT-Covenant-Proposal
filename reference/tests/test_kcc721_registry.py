@@ -61,6 +61,20 @@ class Kcc721RegistryTests(unittest.TestCase):
 
         self.assertFalse(server.db_has_active_kcc721_operation("b" * 64, "public-mint"))
 
+    def test_atomic_batch_reserves_every_nft(self):
+        operation = self.operation(
+            kind="nft-batch-transfer",
+            nftId="1" * 64,
+            nftIds=["1" * 64, "2" * 64, "3" * 64],
+            status="prepared",
+        )
+        server.db_save_kcc721_operation(operation)
+
+        self.assertTrue(server.db_has_active_kcc721_nft_operation("1" * 64))
+        self.assertTrue(server.db_has_active_kcc721_nft_operation("2" * 64))
+        self.assertTrue(server.db_has_active_kcc721_nft_operation("3" * 64))
+        self.assertFalse(server.db_has_active_kcc721_nft_operation("4" * 64))
+
     def test_mint_queue_is_fifo_and_waits_for_active_commit(self):
         collection_id = "b" * 64
         first = self.operation(
@@ -487,6 +501,45 @@ class Kcc721RegistryTests(unittest.TestCase):
         self.assertEqual((old_wallet, old_total), ([], 0))
         self.assertEqual(new_total, 1)
         self.assertEqual(new_wallet[0]["nft_id"], "3" * 64)
+
+    def test_accepted_atomic_batch_updates_all_owner_outpoints(self):
+        collection_id = "b" * 64
+        now = server.now_iso()
+        with server.db_lock, server.db_connect() as conn:
+            for index, nft_id in enumerate(("1" * 64, "2" * 64)):
+                conn.execute(
+                    """
+                    INSERT INTO kcc721_nfts(
+                        nft_id, collection_id, token_id, owner_address, owner_public_key,
+                        outpoint_txid, outpoint_index, status, updated_at, data
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, 'live', ?, ?)
+                    """,
+                    (nft_id, collection_id, index + 1, "kaspa:old", "a" * 64,
+                     str(index + 7) * 64, 0, now, "{}"),
+                )
+        operation = self.operation(
+            kind="nft-batch-transfer",
+            collectionId=collection_id,
+            nftId="1" * 64,
+            nftIds=["1" * 64, "2" * 64],
+            txid="9" * 64,
+            status="accepted",
+            recipientAddress="kaspa:new",
+            recipientPublicKey="c" * 64,
+            items=[
+                {"nftId": "1" * 64, "outputIndex": 0, "nftOutput": {"value": 50_000_000}},
+                {"nftId": "2" * 64, "outputIndex": 1, "nftOutput": {"value": 50_000_000}},
+            ],
+        )
+
+        server.db_index_kcc721_operation(operation)
+
+        first = server.db_get_kcc721_nft("1" * 64)
+        second = server.db_get_kcc721_nft("2" * 64)
+        self.assertEqual((first["owner_address"], first["outpoint_index"]), ("kaspa:new", 0))
+        self.assertEqual((second["owner_address"], second["outpoint_index"]), ("kaspa:new", 1))
+        self.assertEqual(first["outpoint_txid"], "9" * 64)
+        self.assertEqual(second["outpoint_txid"], "9" * 64)
 
 
 if __name__ == "__main__":

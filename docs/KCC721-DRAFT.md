@@ -66,6 +66,18 @@ A transfer MUST preserve the first three fields and MAY replace only `owner`.
 It MUST co-spend a signed P2PK input belonging to the current owner. The
 successor output MUST preserve the NFT Covenant ID and required cell value.
 
+Multiple v0.2 NFT covenant inputs MAY be transferred atomically. Each input
+MUST validate its own successor output and bind that output to its input index.
+All inputs MUST reference a signed P2PK authorization input belonging to their
+current owner. The reference builder uses one common owner, one recipient, one
+funding input, and one successor output per NFT. Failure of any input invalidates
+the entire transaction; partial completion is impossible.
+
+Mainnet mass limits remain authoritative. With the reference v0.2 scripts,
+22 NFTs fit below the 500,000 Storage Mass ceiling, while the 23-NFT reference
+transaction exceeds it. Implementations MUST calculate contextual and
+non-contextual mass for the actual transaction before requesting a signature.
+
 An indexer MUST derive ownership from the latest accepted, unspent covenant
 outpoint. Planned recipients, KRC721 owners, metadata, or hosted registry rows
 MUST NOT override that state.
@@ -155,7 +167,8 @@ The native controller and migration controller are singleton UTXOs. Consensus
 therefore serializes transitions per collection. Services MAY queue competing
 requests, but MUST rebuild against the newest accepted controller outpoint
 before signing. Different collections and independent NFT transfers can proceed
-concurrently.
+concurrently. An atomic batch may include NFTs from multiple v0.2 collections
+when all are owned by the same signing key.
 
 ## Security considerations
 
@@ -177,8 +190,9 @@ promoted, repaired, or silently reinterpreted as v0.2.
 ## Reference implementation status
 
 Kaspa Dev Tools can build and broadcast v0.2 Mainnet collection genesis,
-blind commit/reveal mint, NFT transfer, migration genesis, and arbitrary
-one-time migration issue transactions through Kasware. The native builder
+blind commit/reveal mint, single and 2-to-22 NFT atomic transfer, migration
+genesis, and arbitrary one-time migration issue transactions through Kasware.
+The native builder
 calculates normalized Toccata fees at 100 sompi per gram and never receives a
 private key.
 

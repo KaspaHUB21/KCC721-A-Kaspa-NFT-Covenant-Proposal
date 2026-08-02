@@ -22,6 +22,10 @@ For every candidate genesis or transition:
 6. Execute or independently reproduce all covenant transition checks.
 7. Apply ticker canonicalization only after the genesis is otherwise valid.
 
+For an atomic NFT batch, validate every spent lineage tip and every successor
+binding before committing any owner update. All updated lineage tips belong in
+the same database transaction so the indexed view cannot expose a partial batch.
+
 Unknown versions must not be interpreted using v0.2 rules.
 
 ## State tables

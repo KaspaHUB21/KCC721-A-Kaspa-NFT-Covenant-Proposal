@@ -24,7 +24,6 @@ from urllib.request import Request, urlopen
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BASE_DIR = Path(__file__).resolve().parent
-REPOSITORY_DIR = BASE_DIR.parent
 PUBLIC_DIR = BASE_DIR / "public"
 RUNTIME_DIR = Path(os.environ.get("KASPA_DEVTOOLS_RUNTIME_DIR", str(BASE_DIR / "runtime")))
 RUNTIME_DIR.mkdir(exist_ok=True)
@@ -38,7 +37,7 @@ KRC20_SNAPSHOT_SCRIPT = BASE_DIR / "scripts" / "krc20_snapshot.py"
 KCC721_ENGINE = Path(
     os.environ.get(
         "KASPA_DEVTOOLS_KCC721_ENGINE",
-        str(REPOSITORY_DIR / "protocol" / "kcc721" / "engine" / "target" / "release" / "kcc721-engine"),
+        str(BASE_DIR / "protocol" / "kcc721" / "engine" / "target" / "release" / "kcc721-engine"),
     )
 )
 DB_PATH = RUNTIME_DIR / "devtools.sqlite3"
@@ -936,16 +935,24 @@ def kcc721_mint_queue_response(operation: dict) -> dict:
 def db_has_active_kcc721_nft_operation(nft_id: str) -> bool:
     cutoff = datetime.fromtimestamp(time.time() - 900, timezone.utc).isoformat()
     with db_lock, db_connect() as conn:
-        row = conn.execute(
+        rows = conn.execute(
             """
-            SELECT id FROM kcc721_operations
-            WHERE nft_id = ? AND kind = 'nft-transfer'
+            SELECT nft_id, data FROM kcc721_operations
+            WHERE kind IN ('nft-transfer', 'nft-batch-transfer')
               AND (status = 'submitted' OR (status = 'prepared' AND created_at >= ?))
-            LIMIT 1
             """,
-            (nft_id, cutoff),
-        ).fetchone()
-    return bool(row)
+            (cutoff,),
+        ).fetchall()
+    for row in rows:
+        if row["nft_id"] == nft_id:
+            return True
+        try:
+            operation = json.loads(row["data"])
+        except ValueError:
+            continue
+        if nft_id in (operation.get("nftIds") or []):
+            return True
+    return False
 
 
 def db_index_kcc721_operation(operation: dict) -> None:
@@ -1116,6 +1123,40 @@ def db_index_kcc721_operation(operation: dict) -> None:
                     nft_id,
                 ),
             )
+        return
+    if kind == "nft-batch-transfer":
+        items = operation.get("items") or []
+        if not items:
+            return
+        with db_lock, db_connect() as conn:
+            for item in items:
+                nft_id = item.get("nftId")
+                output_index = int(item.get("outputIndex") or 0)
+                if not nft_id:
+                    continue
+                conn.execute(
+                    """
+                    UPDATE kcc721_nfts
+                    SET owner_address = ?, owner_public_key = ?, outpoint_txid = ?,
+                        outpoint_index = ?, updated_at = ?, data = ?
+                    WHERE nft_id = ?
+                    """,
+                    (
+                        operation.get("recipientAddress") or "",
+                        operation.get("recipientPublicKey") or "",
+                        txid,
+                        output_index,
+                        now,
+                        json.dumps(
+                            {
+                                "batchTransferOperationId": operation.get("id"),
+                                "output": item.get("nftOutput") or {},
+                            },
+                            sort_keys=True,
+                        ),
+                        nft_id,
+                    ),
+                )
         return
     if kind not in ("collection-genesis", "migration-genesis"):
         return
@@ -2260,6 +2301,113 @@ def prepare_kcc721_transfer(payload: dict) -> dict:
         }
         db_save_kcc721_operation(operation)
     return {**engine_result, "mode": "transfer", "operationId": operation_id, "status": "prepared for Kasware approval"}
+
+
+def prepare_kcc721_batch_transfer(payload: dict) -> dict:
+    wallet_address = clean_kaspa_address(payload.get("walletAddress"))
+    recipient_address = clean_kaspa_address(payload.get("recipientAddress"))
+    public_key = str(payload.get("publicKey") or "").strip().lower()
+    if len(public_key) == 66 and public_key[:2] in ("02", "03"):
+        public_key = public_key[2:]
+    if not re.fullmatch(r"[0-9a-f]{64}", public_key):
+        raise BadRequest("Kasware public key must be a 32-byte x-only key.")
+    raw_nft_ids = payload.get("nftIds")
+    if not isinstance(raw_nft_ids, list) or not 2 <= len(raw_nft_ids) <= 22:
+        raise BadRequest("Select between 2 and 22 KCC721 NFTs for an atomic transfer.")
+    nft_ids = [clean_txid(value) for value in raw_nft_ids]
+    if len(set(nft_ids)) != len(nft_ids):
+        raise BadRequest("The same NFT cannot appear twice in an atomic batch.")
+
+    with kcc721_prepare_lock:
+        engine_nfts = []
+        operation_items = []
+        first_collection_id = None
+        for nft_id in nft_ids:
+            nft = db_get_kcc721_nft(nft_id)
+            if not nft or nft.get("status") != "live":
+                raise BadRequest(f"KCC721 NFT {nft_id} is not indexed as live.")
+            if nft["owner_address"] != wallet_address:
+                raise BadRequest("The connected wallet is not the current owner of every selected NFT.")
+            if db_has_active_kcc721_nft_operation(nft_id):
+                raise BadRequest("Another transfer for one of the selected NFTs is already prepared or pending.")
+            collection = db_get_kcc721_collection(nft["collection_id"])
+            manifest = kcc721_collection_manifest(collection)
+            if not str(manifest.get("version") or "").startswith("0.2"):
+                raise BadRequest("Atomic batch transfers require KCC721 v0.2 NFTs.")
+            try:
+                nft_data = json.loads(nft.get("data") or "{}")
+            except ValueError:
+                nft_data = {}
+            current_output = nft_data.get("output") or {}
+            if not current_output.get("scriptPublicKey"):
+                raise RuntimeError("An indexed NFT outpoint is incomplete.")
+            first_collection_id = first_collection_id or nft["collection_id"]
+            engine_nfts.append({
+                "collectionId": nft["collection_id"],
+                "nftId": nft_id,
+                "tokenId": int(nft["token_id"]),
+                "metadataUri": collection["metadata_uri"],
+                "nftUtxo": {
+                    "transactionId": nft["outpoint_txid"],
+                    "index": int(nft["outpoint_index"]),
+                    "amount": str(current_output.get("value") or 0),
+                    "scriptPublicKey": current_output["scriptPublicKey"],
+                    "blockDaaScore": "0",
+                    "isCoinbase": False,
+                },
+            })
+            operation_items.append({
+                "collectionId": nft["collection_id"],
+                "nftId": nft_id,
+                "tokenId": int(nft["token_id"]),
+            })
+
+        engine_result = run_kcc721_engine("prepare-v2-batch-transfer", {
+            "currentOwnerPublicKey": public_key,
+            "recipientAddress": recipient_address,
+            "nfts": engine_nfts,
+            "fundingUtxo": clean_kasware_utxo(payload.get("fundingUtxo")),
+        })
+        if engine_result.get("previousOwnerAddress") != wallet_address:
+            raise BadRequest("Kasware address and public key do not match.")
+        if engine_result.get("recipientAddress") != recipient_address:
+            raise BadRequest("The recipient must be a Mainnet P2PK address.")
+        safe_transaction = json.loads(engine_result["txJsonString"])
+        for item in operation_items:
+            output_index = next(
+                value["outputIndex"] for value in engine_result["items"]
+                if value["nftId"] == item["nftId"]
+            )
+            item["outputIndex"] = output_index
+            item["nftOutput"] = safe_transaction["outputs"][output_index]
+        operation_id = uuid.uuid4().hex
+        operation = {
+            "id": operation_id,
+            "walletAddress": wallet_address,
+            "kind": "nft-batch-transfer",
+            "collectionId": first_collection_id,
+            "nftId": nft_ids[0],
+            "nftIds": nft_ids,
+            "items": operation_items,
+            "recipientAddress": recipient_address,
+            "recipientPublicKey": engine_result["recipientPublicKey"],
+            "expectedTxid": engine_result["transactionId"],
+            "txid": None,
+            "status": "prepared",
+            "createdAt": now_iso(),
+            "updatedAt": now_iso(),
+            "feeSompi": engine_result["feeSompi"],
+            "computeMass": engine_result["computeMass"],
+            "transientMass": engine_result["transientMass"],
+            "storageMass": engine_result["storageMass"],
+        }
+        db_save_kcc721_operation(operation)
+    return {
+        **engine_result,
+        "mode": "batch-transfer",
+        "operationId": operation_id,
+        "status": "atomic batch prepared for one Kasware approval",
+    }
 
 
 def register_kcc721_broadcast(payload: dict) -> dict:
@@ -3476,6 +3624,8 @@ class DevToolsHandler(BaseHTTPRequestHandler):
             return self.handle_kcc721_prepare_migration_issue()
         if parsed.path == "/api/kcc721/prepare-transfer":
             return self.handle_kcc721_prepare_transfer()
+        if parsed.path == "/api/kcc721/prepare-batch-transfer":
+            return self.handle_kcc721_prepare_batch_transfer()
         if parsed.path == "/api/kcc721/register-broadcast":
             return self.handle_kcc721_register_broadcast()
         if parsed.path != "/api/jobs":
@@ -3656,6 +3806,21 @@ class DevToolsHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             logger.exception("KCC721 Mainnet transfer preparation failed: %s", exc)
             return self.send_json(500, {"error": "KCC721 Mainnet transfer preparation failed."})
+
+    def handle_kcc721_prepare_batch_transfer(self):
+        try:
+            payload = self.read_kcc721_json_body()
+            check_rate_limit(f"kcc721:batch-transfer:{self.client_ip()}", 20)
+            return self.send_json(200, prepare_kcc721_batch_transfer(payload))
+        except BadRequest as exc:
+            return self.send_json(400, {"error": str(exc)})
+        except json.JSONDecodeError:
+            return self.send_json(400, {"error": "Invalid JSON."})
+        except subprocess.TimeoutExpired:
+            return self.send_json(504, {"error": "KCC721 atomic batch builder timed out."})
+        except Exception as exc:
+            logger.exception("KCC721 Mainnet atomic batch preparation failed: %s", exc)
+            return self.send_json(500, {"error": "KCC721 Mainnet atomic batch preparation failed."})
 
     def handle_kcc721_register_broadcast(self):
         try:
@@ -4405,12 +4570,7 @@ def main():
     threading.Thread(target=kcc721_indexer_loop, name="kcc721-indexer", daemon=True).start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), DevToolsHandler)
     logger.info("Kaspa Dev Tools running on http://127.0.0.1:%s", PORT)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+    server.serve_forever()
 
 
 if __name__ == "__main__":
