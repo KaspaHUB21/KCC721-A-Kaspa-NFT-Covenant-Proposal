@@ -760,10 +760,15 @@
   async function pushReviewedTransaction(plan, needsSignature) {
     let transaction = plan.txJsonString;
     if (needsSignature) {
-      transaction = await window.kasware.signPskt({
-        txJsonString: plan.txJsonString,
-        options: { signInputs: plan.signInputs },
-      });
+      toast("Kasware approval requested. Open the extension if its window is hidden.");
+      transaction = await withTimeout(
+        window.kasware.signPskt({
+          txJsonString: plan.txJsonString,
+          options: { signInputs: plan.signInputs },
+        }),
+        "Kasware did not answer the signing request within 60 seconds. Open Kasware, close any pending approval and prepare the batch again.",
+        60000,
+      );
     }
     try {
       const pushed = await window.kasware.pushTx(transaction);
@@ -771,6 +776,22 @@
     } catch (error) {
       if (plan.transactionId && await waitForAcceptance(plan.transactionId)) return plan.transactionId;
       throw error;
+    }
+  }
+
+  async function cancelPreparedBatch(plan) {
+    if (plan?.mode !== "batch-transfer" || plan?.status !== "atomic batch prepared for one Kasware approval") return;
+    try {
+      await fetch("/api/kcc721/cancel-operation", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ operationId: plan.operationId, walletAddress: state.walletAddress }),
+      });
+      plan.status = "signing cancelled - prepare the batch again";
+      state.plan = plan;
+      renderPlan();
+    } catch {
+      // The prepared reservation expires server-side even if cancellation cannot be confirmed.
     }
   }
 
@@ -832,6 +853,10 @@
         return;
       }
       const txid = await pushReviewedTransaction(plan, true);
+      plan.transactionId = txid;
+      plan.status = "submitted - registering Mainnet transaction";
+      state.plan = plan;
+      renderPlan();
       if (plan.mode === "mint-commit") savePendingMint({ ...plan, transactionId: txid, status: "submitted" });
       toast("KCC721 transaction submitted to Mainnet.");
       if (await registerAndWait(plan, txid)) {
@@ -853,6 +878,9 @@
         if (plan.mode === "mint-commit") savePendingMint(plan);
         renderPlan();
       }
+    } catch (error) {
+      await cancelPreparedBatch(state.plan);
+      throw error;
     } finally {
       state.broadcasting = false;
       els.signPlan.disabled = state.plan?.status === "accepted";

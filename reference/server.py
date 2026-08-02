@@ -955,6 +955,30 @@ def db_has_active_kcc721_nft_operation(nft_id: str) -> bool:
     return False
 
 
+def db_cancel_matching_prepared_kcc721_batches(wallet_address: str, nft_ids: set[str]) -> int:
+    with db_lock, db_connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT data FROM kcc721_operations
+            WHERE wallet_address = ? AND kind = 'nft-batch-transfer' AND status = 'prepared'
+            """,
+            (wallet_address,),
+        ).fetchall()
+    cancelled = 0
+    for row in rows:
+        try:
+            operation = json.loads(row["data"])
+        except ValueError:
+            continue
+        if not nft_ids.intersection(operation.get("nftIds") or []):
+            continue
+        operation["status"] = "cancelled"
+        operation["updatedAt"] = now_iso()
+        db_save_kcc721_operation(operation)
+        cancelled += 1
+    return cancelled
+
+
 def db_index_kcc721_operation(operation: dict) -> None:
     manifest = operation.get("manifest") or {}
     collection_id = operation.get("collectionId")
@@ -2319,6 +2343,7 @@ def prepare_kcc721_batch_transfer(payload: dict) -> dict:
         raise BadRequest("The same NFT cannot appear twice in an atomic batch.")
 
     with kcc721_prepare_lock:
+        db_cancel_matching_prepared_kcc721_batches(wallet_address, set(nft_ids))
         engine_nfts = []
         operation_items = []
         first_collection_id = None
@@ -2432,6 +2457,23 @@ def register_kcc721_broadcast(payload: dict) -> dict:
         "collectionId": operation.get("collectionId"),
         "status": operation["status"],
     }
+
+
+def cancel_kcc721_operation(payload: dict) -> dict:
+    operation_id = str(payload.get("operationId") or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", operation_id):
+        raise BadRequest("Invalid KCC721 operation ID.")
+    wallet_address = clean_kaspa_address(payload.get("walletAddress"))
+    operation = db_get_kcc721_operation(operation_id)
+    if not operation or operation.get("walletAddress") != wallet_address:
+        raise BadRequest("KCC721 operation was not found for this wallet.")
+    if operation.get("status") == "prepared":
+        operation["status"] = "cancelled"
+        operation["updatedAt"] = now_iso()
+        db_save_kcc721_operation(operation)
+    return {"operationId": operation_id, "status": operation.get("status")}
+
+
 def get_krc20_address_balance(address: str, tick: str) -> float:
     cursor = None
     while True:
@@ -3628,6 +3670,8 @@ class DevToolsHandler(BaseHTTPRequestHandler):
             return self.handle_kcc721_prepare_batch_transfer()
         if parsed.path == "/api/kcc721/register-broadcast":
             return self.handle_kcc721_register_broadcast()
+        if parsed.path == "/api/kcc721/cancel-operation":
+            return self.handle_kcc721_cancel_operation()
         if parsed.path != "/api/jobs":
             return self.send_json(404, {"error": "Not found."})
         try:
@@ -3836,6 +3880,19 @@ class DevToolsHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             logger.exception("KCC721 broadcast registration failed: %s", exc)
             return self.send_json(500, {"error": "KCC721 broadcast registration failed."})
+
+    def handle_kcc721_cancel_operation(self):
+        try:
+            payload = self.read_kcc721_json_body()
+            check_rate_limit(f"kcc721:cancel:{self.client_ip()}", 30)
+            return self.send_json(200, cancel_kcc721_operation(payload))
+        except BadRequest as exc:
+            return self.send_json(400, {"error": str(exc)})
+        except json.JSONDecodeError:
+            return self.send_json(400, {"error": "Invalid JSON."})
+        except Exception as exc:
+            logger.exception("KCC721 operation cancellation failed: %s", exc)
+            return self.send_json(500, {"error": "KCC721 operation cancellation failed."})
 
     def handle_kcc721_transaction(self, parsed):
         try:

@@ -75,6 +75,44 @@ class Kcc721RegistryTests(unittest.TestCase):
         self.assertTrue(server.db_has_active_kcc721_nft_operation("3" * 64))
         self.assertFalse(server.db_has_active_kcc721_nft_operation("4" * 64))
 
+    def test_cancelled_batch_releases_every_nft(self):
+        wallet = "kaspa:qptest"
+        operation = self.operation(
+            kind="nft-batch-transfer",
+            walletAddress=wallet,
+            nftId="1" * 64,
+            nftIds=["1" * 64, "2" * 64],
+            status="prepared",
+        )
+        server.db_save_kcc721_operation(operation)
+
+        with patch.object(server, "clean_kaspa_address", return_value=wallet):
+            result = server.cancel_kcc721_operation({
+                "operationId": operation["id"],
+                "walletAddress": wallet,
+            })
+
+        self.assertEqual(result["status"], "cancelled")
+        self.assertFalse(server.db_has_active_kcc721_nft_operation("1" * 64))
+        self.assertFalse(server.db_has_active_kcc721_nft_operation("2" * 64))
+
+    def test_repreparing_same_wallet_batch_releases_previous_reservation(self):
+        wallet = "kaspa:qptest"
+        operation = self.operation(
+            kind="nft-batch-transfer",
+            walletAddress=wallet,
+            nftId="1" * 64,
+            nftIds=["1" * 64, "2" * 64],
+            status="prepared",
+        )
+        server.db_save_kcc721_operation(operation)
+
+        cancelled = server.db_cancel_matching_prepared_kcc721_batches(wallet, {"2" * 64, "3" * 64})
+
+        self.assertEqual(cancelled, 1)
+        self.assertEqual(server.db_get_kcc721_operation(operation["id"])["status"], "cancelled")
+        self.assertFalse(server.db_has_active_kcc721_nft_operation("1" * 64))
+
     def test_mint_queue_is_fifo_and_waits_for_active_commit(self):
         collection_id = "b" * 64
         first = self.operation(
